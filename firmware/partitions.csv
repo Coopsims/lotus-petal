@@ -1,0 +1,14 @@
+# Partition table for a 16 MB flash.
+#
+# Two app slots, so a dial can be handed a new image by another dial: the running
+# slot writes the incoming image into the idle one and reboots into it, and the
+# bootloader rolls back automatically if the new image never marks itself valid.
+# 3 MB each is roughly double the current app, leaving room to grow.
+#
+# App partitions must start on a 64 KB boundary, and otadata must be exactly 8 KB.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xf000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x300000,
+ota_1,      app,  ota_1,   0x320000, 0x300000,

@@ -1,0 +1,20 @@
+# ESP-IDF build output and generated config
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Editor / tooling caches
+.cache/
+.idea/
+.vscode/
+compile_commands.json
+
+# Flash dumps and firmware images: large, and never source
+*.bin
+*.elf
+*.map
+
+# macOS
+.DS_Store

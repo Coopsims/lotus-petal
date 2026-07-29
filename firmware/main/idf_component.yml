@@ -1,0 +1,11 @@
+## Managed components, fetched from the Espressif component registry on the first
+## `idf.py build`. Everything except LVGL is a driver for the reference board and
+## belongs to the HAL; a port to other hardware swaps these out.
+##
+## esp_lcd_st77916 v2 is what forces ESP-IDF >= 5.4 (see docs/BUILD.md).
+dependencies:
+  idf: ">=5.4"
+  lvgl/lvgl: "^9.2.0"
+  espressif/esp_lcd_st77916: "^2.0.0"
+  espressif/esp_lvgl_port: "^2.4.0"
+  espressif/esp_lcd_touch_cst816s: "^1.0.0"

@@ -1,0 +1,53 @@
+# Defaults for the reference board: ESP32-S3R8, 16 MB flash, 8 MB octal PSRAM.
+#
+# sdkconfig itself is generated and gitignored, so anything that has to survive a
+# clean checkout belongs here.
+CONFIG_IDF_TARGET="esp32s3"
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Custom partition table: the default single-app layout gives the app 1 MB, which
+# this UI outgrows once WiFi links in. partitions.csv defines two 3 MB slots.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Power: cap the CPU at 160 MHz and scale down to 80 MHz when idle. Plenty for
+# this UI and noticeably lighter on the battery than a constant 240 MHz. Light
+# sleep stays off, so display, touch and USB behave exactly as they would
+# without power management.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+
+# 8 MB embedded octal PSRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# LVGL: 16-bit colour, and every font size the screens actually ask for.
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+CONFIG_LV_USE_LOG=y
+
+# LVGL allocator: the built-in pool is a fixed 64 KB of internal RAM, and the UI
+# outgrew it. LVGL's malloc assert spins forever on failure, so exhaustion showed
+# up as a watchdog reset rather than an out-of-memory error. Using the C library
+# heap instead lets allocations fall back to PSRAM, so the UI is no longer capped
+# by a compile-time pool.
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# Refresh period: the 33 ms default makes touch feel laggy.
+CONFIG_LV_DEF_REFR_PERIOD=16
+
+# Two app slots plus rollback, so a bad image cannot strand a dial: a build that
+# never confirms itself is rolled back by the bootloader on the next boot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
