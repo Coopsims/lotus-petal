@@ -1,8 +1,13 @@
 /*
- * screen_counters.h — data-driven list of secondary counters (poison, monarch,
- * day/night, ...). Add a counter by dropping another counter_t in the table in
- * the .c; the row widgets and input routing adapt automatically. Tap a row's
- * upper/lower half to step it (also selects it); the dial adjusts the selected.
+ * screen_counters.h — data-driven grid of secondary counters (tokens, poison,
+ * commander tax, monarch, the Ring, day/night, ...).
+ *
+ * Add a counter by dropping another counter_t in the table in the .c; the tiles,
+ * the input routing and the persistence all adapt. Anything special about it goes
+ * in its `role` / `per_turn` fields — never key behaviour off the display name.
+ *
+ * Tap a tile to select it; the dial adjusts the selected one. Taps never change a
+ * value, so an accidental tap while swiping cannot alter a count.
  */
 #ifndef LOTUS_SCREEN_COUNTERS_H
 #define LOTUS_SCREEN_COUNTERS_H

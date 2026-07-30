@@ -4,49 +4,44 @@
 #include "ui_common.h"
 
 #include <stdint.h>
-#include <stdio.h>
-#include <string.h>
 
 /*
- * Every counter and token is one box in a scrollable 2-column grid. Add a new
- * one by dropping a counter_t in the table — the tiles and input routing adapt.
- * The first TOKEN_ROWS entries are "tokens" (a held count pops gold).
+ * Every counter and token is one box in a scrollable grid. Add a new one by
+ * dropping a counter_t in the table below — the tiles, the input routing and the
+ * persistence all size themselves from it.
+ *
+ * Anything special about a counter is declared in its `role` and `per_turn`
+ * fields rather than inferred from its name or its position in the table. That
+ * matters: this screen used to find poison with strcmp(name, "Poison") and the
+ * tokens by "the first four rows", so renaming a label or reordering the table
+ * silently changed behaviour — including the lethal-threshold check that decides
+ * whether the bow-out button appears at all.
+ *
+ * NOTE: saved games are stored by table INDEX, so inserting a counter anywhere
+ * but the end shifts existing saves. Bump PERSIST_VERSION in model/persist.c if
+ * you reorder, and old saves are then discarded cleanly instead of misread.
  */
 static const char *const k_onoff[]    = { "OFF", "ON" };
 static const char *const k_daynight[] = { "--", "Day", "Night" };
 static const char *const k_ring[]     = { "--", "I", "II", "III", "IV" };
 
-#define TOKEN_ROWS 4  /* Treasure/Food/Clue/Blood lead the table */
-
-/* Commander-tax rows track times cast from the command zone; the tile shows the
- * derived tax (+2 per cast) rather than the raw count. Matched by name prefix. */
-#define TAX_PER_CAST 2
-
 static counter_t s_counters[] = {
-    { .name = "Treasure",   .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    { .name = "Food",       .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    { .name = "Clue",       .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    { .name = "Blood",      .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    /* Commander tax: value = times cast, displayed as +2 per cast. */
-    { .name = "Cmdr A",     .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 30, .wrap = false },
-    { .name = "Cmdr B",     .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 30, .wrap = false },
-    { .name = "Poison",     .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 10, .wrap = false },
-    { .name = "Energy",     .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    { .name = "Experience", .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    /* Per-turn: zeroed by screen_counters_new_turn() (matched by name). */
-    { .name = "Storm",      .type = COUNTER_TYPE_INT,    .value = 0, .min = 0, .max = 99, .wrap = false },
-    { .name = "Monarch",    .type = COUNTER_TYPE_TOGGLE, .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
-    { .name = "Initiative", .type = COUNTER_TYPE_TOGGLE, .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
-    { .name = "Ring",       .type = COUNTER_TYPE_CYCLE,  .value = 0, .min = 0, .max = 4,  .wrap = true, .labels = k_ring },
-    { .name = "Day/Night",  .type = COUNTER_TYPE_CYCLE,  .value = 0, .min = 0, .max = 2,  .wrap = true, .labels = k_daynight },
+    { .name = "Treasure",   .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_TOKEN,         .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Food",       .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_TOKEN,         .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Clue",       .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_TOKEN,         .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Blood",      .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_TOKEN,         .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Cmdr A",     .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_COMMANDER_TAX, .value = 0, .min = 0, .max = 30, .wrap = false },
+    { .name = "Cmdr B",     .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_COMMANDER_TAX, .value = 0, .min = 0, .max = 30, .wrap = false },
+    { .name = "Poison",     .type = COUNTER_TYPE_INT,    .role = COUNTER_ROLE_POISON,        .value = 0, .min = 0, .max = COUNTER_POISON_LETHAL, .wrap = false },
+    { .name = "Energy",     .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Experience", .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false },
+    { .name = "Storm",      .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false, .per_turn = true },
+    { .name = "Monarch",    .type = COUNTER_TYPE_TOGGLE,                                     .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
+    { .name = "Initiative", .type = COUNTER_TYPE_TOGGLE,                                     .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
+    { .name = "Ring",       .type = COUNTER_TYPE_CYCLE,                                      .value = 0, .min = 0, .max = 4,  .wrap = true, .labels = k_ring },
+    { .name = "Day/Night",  .type = COUNTER_TYPE_CYCLE,                                      .value = 0, .min = 0, .max = 2,  .wrap = true, .labels = k_daynight },
 };
 #define COUNTER_COUNT ((int)(sizeof(s_counters) / sizeof(s_counters[0])))
-
-/* True for the commander-tax rows, which render their value specially. */
-static bool is_tax_row(int i)
-{
-    return strncmp(s_counters[i].name, "Cmdr", 4) == 0;
-}
 
 static lv_obj_t *s_tile[COUNTER_COUNT];
 static lv_obj_t *s_value[COUNTER_COUNT];
@@ -56,22 +51,21 @@ static int s_selected;
 static void refresh_tile(int i)
 {
     counter_t *c = &s_counters[i];
+
+    /* Role-derived rendering (commander tax) is handled inside the model, so
+     * every counter draws through the same call. */
     char buf[12];
-    if (is_tax_row(i)) {
-        snprintf(buf, sizeof(buf), "+%d", c->value * TAX_PER_CAST);
-    } else {
-        counter_value_text(c, buf, sizeof(buf));
-    }
+    counter_value_text(c, buf, sizeof(buf));
     lv_label_set_text(s_value[i], buf);
 
     uint32_t col;
-    if (is_tax_row(i)) {
-        col = (c->value > 0) ? UI_COL_GOLD : UI_COL_MUTED;        /* commander tax */
+    if (c->role == COUNTER_ROLE_COMMANDER_TAX) {
+        col = (c->value > 0) ? UI_COL_GOLD : UI_COL_MUTED;        /* tax is owed */
     } else if (c->type != COUNTER_TYPE_INT) {
         col = (c->value > c->min) ? UI_COL_GOLD : UI_COL_MUTED;   /* active toggle/cycle */
     } else if (counter_at_max(c)) {
-        col = UI_COL_DANGER;                                      /* e.g. poison 10 */
-    } else if (i < TOKEN_ROWS && c->value > 0) {
+        col = UI_COL_DANGER;                                      /* e.g. lethal poison */
+    } else if (c->role == COUNTER_ROLE_TOKEN && c->value > 0) {
         col = UI_COL_GOLD;                                        /* a held token pops */
     } else {
         col = (c->value > 0) ? UI_COL_TEXT : UI_COL_MUTED;
@@ -165,7 +159,7 @@ lv_obj_t *screen_counters_create(void)
 void screen_counters_reset(void)
 {
     for (int i = 0; i < COUNTER_COUNT; i++) {
-        s_counters[i].value = s_counters[i].min;
+        counter_reset(&s_counters[i]);
         refresh_tile(i);
     }
     s_selected = 0;
@@ -175,9 +169,9 @@ void screen_counters_reset(void)
 int screen_counters_poison(void)
 {
     for (int i = 0; i < COUNTER_COUNT; i++) {
-        if (strcmp(s_counters[i].name, "Poison") == 0) return s_counters[i].value;
+        if (s_counters[i].role == COUNTER_ROLE_POISON) return s_counters[i].value;
     }
-    return 0;
+    return 0;   /* a build with no poison counter simply never reaches that threshold */
 }
 
 int screen_counters_num(void)
@@ -203,10 +197,9 @@ void screen_counters_set_value(int i, int v)
 void screen_counters_new_turn(void)
 {
     for (int i = 0; i < COUNTER_COUNT; i++) {
-        if (strcmp(s_counters[i].name, "Storm") == 0) {
-            s_counters[i].value = s_counters[i].min;
-            refresh_tile(i);
-        }
+        if (!s_counters[i].per_turn) continue;
+        counter_reset(&s_counters[i]);
+        refresh_tile(i);
     }
 }
 

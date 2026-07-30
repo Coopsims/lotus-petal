@@ -1,5 +1,6 @@
 #include "game.h"
 
+#include "counter.h"
 #include "persist.h"
 #include "net_link.h"
 #include "screens/screen_life.h"
@@ -54,13 +55,16 @@ void game_set_eliminated(bool out)
     persist_mark_dirty();
 }
 
-/* Lethal thresholds: no life left, 21 from a single commander, or ten poison.
- * Reaching one only offers the choice — it never takes it. */
+/* Lethal thresholds: no life left, a full helping of commander damage from one
+ * commander, or a full dose of poison. Each threshold is named where the thing it
+ * measures is defined, so the rule is never written down twice. Reaching one only
+ * OFFERS the choice to bow out — it never takes it, because life legitimately
+ * dips below zero mid-resolution. */
 bool game_can_eliminate(void)
 {
     return screen_life_get_life() <= 0 ||
-           screen_commander_max_damage() >= 21 ||
-           screen_counters_poison() >= 10;
+           screen_commander_max_damage() >= COMMANDER_LETHAL ||
+           screen_counters_poison() >= COUNTER_POISON_LETHAL;
 }
 
 static bool remote_live(void)

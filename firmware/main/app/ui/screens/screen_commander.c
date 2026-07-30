@@ -27,7 +27,6 @@
  * then adjusts it, mirroring into your life total.
  */
 #define MAX_SEATS        8
-#define COMMANDER_LETHAL 21
 
 #define ARC_SIZE   300
 #define ARC_WIDTH  86

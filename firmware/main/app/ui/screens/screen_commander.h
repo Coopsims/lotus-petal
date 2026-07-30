@@ -16,6 +16,10 @@
 
 #include "lvgl.h"
 
+/** Commander damage at or above this from a single commander is lethal. Used as
+ *  the per-wedge ceiling and by the elimination check, so the rule lives once. */
+#define COMMANDER_LETHAL 21
+
 /** Build the Commander overlay once (call after the Life screen exists). */
 void screen_commander_init(void);
 
