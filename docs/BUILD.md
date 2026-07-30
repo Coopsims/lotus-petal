@@ -134,6 +134,30 @@ The image travels dial-to-dial over the radio and the receiver reboots into it. 
 safety properties: the image goes into the inactive slot, is verified before it is
 committed, and is rolled back automatically if it fails to boot.
 
+## Capturing a boot log without the interactive monitor
+
+Useful in scripts and CI. Two control lines matter and are easy to get backwards:
+
+- **DTR drives BOOT/GPIO0** — it must stay *high*, i.e. `dtr = False`. pyserial
+  asserts DTR on open by default, which pulls BOOT low and brings the chip up in
+  download mode with no app log at all.
+- **RTS drives EN/reset** — pulse `rts = True` for ~0.25 s, then release.
+
+```python
+import serial, time
+s = serial.Serial()
+s.port, s.baudrate, s.timeout = "/dev/cu.usbmodem2101", 115200, 0.2
+s.dsrdtr = False          # do not touch DTR on open
+s.open()
+s.dtr = False             # BOOT high -> normal boot
+s.rts = True; time.sleep(0.25); s.rts = False   # reset
+print(s.read(20000).decode(errors="replace"))
+```
+
+pyserial is only present inside the ESP-IDF environment, so source `export.sh`
+first. Note that a booted, idle device logs nothing — zero bytes means the reset
+did not fire, not that the firmware failed.
+
 ## Troubleshooting
 
 | Symptom | Cause |
@@ -149,6 +173,7 @@ committed, and is rolled back automatically if it fails to boot.
 | Touch lands off-target | Settings → Calibrate Touch. |
 | Touch feels laggy | `CONFIG_LV_DEF_REFR_PERIOD` above 16. |
 | Watchdog reset while opening a screen | LVGL heap exhaustion — check `CONFIG_LV_USE_CLIB_MALLOC=y`. |
+| `E gpio: gpio_install_isr_service(): GPIO isr service already installed` | **Benign, expected.** The touch driver installs the shared GPIO interrupt service first; the dial only wants to add a handler to it. `hal_dial.c` tolerates this explicitly — the message is ESP-IDF's, logged at ERROR level for a condition that is normal here. |
 | Two dials never see each other | Channel mismatch, or the radio is following an access-point association. |
 | App does not fit the partition | Custom partition table not picked up; check `CONFIG_PARTITION_TABLE_CUSTOM`. |
 | Large esptool reads fail intermittently | Known flakiness over USB-JTAG on some units. Use the default baud, or enter download mode. |
