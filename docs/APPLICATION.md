@@ -47,12 +47,19 @@ A large life total, starting at `GAME_STARTING_LIFE` (40), inside a 270° arc th
 shortens as life falls and sweeps hue 120→0, green through yellow to red. The arc
 opens downward, and the gap is where the Pass button sits.
 
-**Above the starting total** the gauge has nowhere left to grow, so a second ring
-fills from the *opposite* end and eats the green as life climbs — blue at one over,
-purple by the time it is full at double the starting total (80). Past that the ring
-is already full and length can no longer say anything, so the colour cycles through
-the spectrum instead. The point is that gaining life keeps changing the picture
-rather than pegging at "full". The cycling timer runs only while it is needed.
+**Above the starting total** the gauge has nowhere left to grow, so a second band is
+laid *over* the base ring and eats the green as life climbs — blue at one point over,
+purple by the time it is full at double the starting total (80). Past that the band
+is full and length can no longer say anything, so the whole spectrum is painted
+around it and slowly rotated. The point is that gaining life keeps changing the
+picture rather than pegging at "full"; the rotation timer runs only while needed.
+
+An LVGL arc is a single solid colour, so the gradient is built from
+`LIFE_OVER_SEGS` (24) segment arcs sharing the ring's track, each carrying its own
+hue and revealed in turn. Angles are set explicitly rather than through a value and
+an arc mode, so which slice each segment covers is unambiguous — and
+`LIFE_OVER_FROM_START` flips which end the band grows from in one constant, since
+that is a matter of taste rather than correctness.
 
 Around it:
 

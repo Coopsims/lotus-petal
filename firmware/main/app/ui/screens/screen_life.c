@@ -31,17 +31,33 @@
 /* The base ring reads "full" at the starting life and empties as life falls to 0. */
 #define LIFE_BAR_FULL GAME_STARTING_LIFE
 
-/* Above the starting total the gauge has nowhere left to grow, so a SECOND ring
- * fills from the opposite end and eats the base ring as life climbs — gaining
- * life keeps changing the picture instead of pegging at full. Blue at one over,
- * purple by the time the second ring is full at double the starting total. */
+/* The gauge's sweep, shared by the base ring and the overflow band. LVGL angles
+ * start at 3 o'clock and increase clockwise, so 135 deg is the lower-left and the
+ * 270 deg sweep leaves the gap at the bottom. */
+#define RING_SWEEP_START 135
+#define RING_SWEEP_DEG   270
+
+/* Above the starting total the gauge has nowhere left to grow, so a second band
+ * is laid OVER the base ring and eats the green as life climbs — gaining life
+ * keeps changing the picture instead of pegging at full.
+ *
+ * An LVGL arc is a single solid colour, so a gradient along the sweep has to be
+ * built from segments: each covers one slice and carries its own hue, blue at the
+ * first through purple at the last. */
+#define LIFE_OVER_SEGS   24
 #define LIFE_OVER_HUE_LO 220   /* blue   */
 #define LIFE_OVER_HUE_HI 285   /* purple */
 
-/* Past double there is no length left to say anything with, so the colour cycles
- * instead. The timer only runs while it is needed. */
+/* Which end the band grows from. 1 = the same end the base ring fills from, so
+ * the gradient eats the green forwards; 0 = from the far end, backwards. One
+ * constant, because which one reads better is a matter of taste. */
+#define LIFE_OVER_FROM_START 1
+
+/* Past double the starting total the band is full and length can no longer say
+ * anything, so the whole spectrum is painted around it and rotated. The timer
+ * only runs while it is needed. */
 #define RAINBOW_PERIOD_MS 70
-#define RAINBOW_STEP_DEG  6
+#define RAINBOW_STEP_DEG  4
 
 static counter_t s_life = {
     .name = "Life",
@@ -65,7 +81,7 @@ static lv_obj_t *s_peer[NET_MAX_OTHERS];      /* small life ring per linked dial
 static lv_obj_t *s_peer_name[NET_MAX_OTHERS]; /* "P2" — goes gold on their turn  */
 static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contrast */
 
-static lv_obj_t   *s_over;      /* overflow ring, above the starting total */
+static lv_obj_t   *s_over_seg[LIFE_OVER_SEGS];  /* overflow band, one per slice */
 static lv_timer_t *s_rainbow;   /* runs only past double the starting total */
 static uint16_t    s_rainbow_hue;
 
@@ -263,44 +279,79 @@ static void refresh_turn(void)
     lv_obj_set_style_text_color(s_turnlbl, lv_color_hex(col), 0);
 }
 
-/* Cycles the overflow ring's hue. Only resumed past double the starting total,
- * where the ring is already full and length can no longer convey anything. */
+/* Segments are laid out in geometric order but revealed in fill order, so which
+ * end the band grows from is just a remap. */
+static lv_obj_t *over_seg_in_fill_order(int k)
+{
+#if LIFE_OVER_FROM_START
+    return s_over_seg[k];
+#else
+    return s_over_seg[LIFE_OVER_SEGS - 1 - k];
+#endif
+}
+
+/* Blue at the first segment, purple at the last. */
+static uint16_t over_hue(int k)
+{
+    return (uint16_t)(LIFE_OVER_HUE_LO +
+        (long)k * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / (LIFE_OVER_SEGS - 1));
+}
+
+/* Rotates a full spectrum around the band. Only resumed past double the starting
+ * total, where every segment is already showing. */
 static void rainbow_cb(lv_timer_t *t)
 {
     LV_UNUSED(t);
     s_rainbow_hue = (uint16_t)((s_rainbow_hue + RAINBOW_STEP_DEG) % 360);
-    lv_obj_set_style_arc_color(s_over, lv_color_hsv_to_rgb(s_rainbow_hue, 90, 100),
-                               LV_PART_INDICATOR);
+
+    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+        uint16_t hue = (uint16_t)((s_rainbow_hue + k * 360 / LIFE_OVER_SEGS) % 360);
+        lv_obj_set_style_arc_color(over_seg_in_fill_order(k),
+                                   lv_color_hsv_to_rgb(hue, 90, 100), LV_PART_INDICATOR);
+    }
 }
 
-/* Life above the starting total. Grows from the far end of the gauge (REVERSE),
- * so it covers the green rather than extending past it, and sweeps blue -> purple
- * as it fills. */
+/* Life above the starting total, drawn over the base ring as a blue -> purple
+ * gradient band that covers the green as it fills. */
 static void refresh_overflow(void)
 {
-    if (!s_over) return;
+    if (!s_over_seg[0]) return;
 
     int over = s_life.value - LIFE_BAR_FULL;
     if (over <= 0) {
-        lv_obj_add_flag(s_over, LV_OBJ_FLAG_HIDDEN);
+        for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+            lv_obj_add_flag(s_over_seg[k], LV_OBJ_FLAG_HIDDEN);
+        }
         if (s_rainbow) lv_timer_pause(s_rainbow);
         return;
     }
-    lv_obj_remove_flag(s_over, LV_OBJ_FLAG_HIDDEN);
 
     int len = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
-    lv_arc_set_value(s_over, len);
 
-    if (over > LIFE_BAR_FULL) {
-        if (s_rainbow) lv_timer_resume(s_rainbow);   /* the colour does the talking */
-        return;
+    /* Round UP, so a single point over the starting total already shows something
+     * rather than waiting for a whole segment's worth. */
+    int shown = (len * LIFE_OVER_SEGS + LIFE_BAR_FULL - 1) / LIFE_BAR_FULL;
+    if (shown > LIFE_OVER_SEGS) shown = LIFE_OVER_SEGS;
+
+    bool rainbow = (over > LIFE_BAR_FULL);
+
+    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+        lv_obj_t *seg = over_seg_in_fill_order(k);
+        if (k >= shown) {
+            lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_remove_flag(seg, LV_OBJ_FLAG_HIDDEN);
+        if (!rainbow) {
+            lv_obj_set_style_arc_color(seg, lv_color_hsv_to_rgb(over_hue(k), 85, 95),
+                                       LV_PART_INDICATOR);
+        }
     }
 
-    if (s_rainbow) lv_timer_pause(s_rainbow);
-    uint16_t hue = (uint16_t)(LIFE_OVER_HUE_LO +
-        (long)len * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / LIFE_BAR_FULL);
-    lv_obj_set_style_arc_color(s_over, lv_color_hsv_to_rgb(hue, 85, 95),
-                               LV_PART_INDICATOR);
+    if (s_rainbow) {
+        if (rainbow) lv_timer_resume(s_rainbow);
+        else         lv_timer_pause(s_rainbow);
+    }
 }
 
 static void refresh(void)
@@ -462,31 +513,42 @@ lv_obj_t *screen_life_create(void)
     lv_obj_add_flag(s_arc, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB); /* hide the drag knob */
-    lv_arc_set_bg_angles(s_arc, 135, 45);           /* 270°, opening downward */
+    lv_arc_set_bg_angles(s_arc, RING_SWEEP_START,
+                         (RING_SWEEP_START + RING_SWEEP_DEG) % 360); /* gap at the bottom */
     lv_arc_set_range(s_arc, 0, LIFE_BAR_FULL);
     lv_obj_set_style_arc_width(s_arc, LIFE_RING_W, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_arc, LIFE_RING_W, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_arc, lv_color_hex(UI_COL_TILE), LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
 
-    /* Overflow ring, on the same track and created straight after the base ring
-     * so it draws on top of it. REVERSE grows it from the opposite end, and its
-     * own background is transparent — a painted track would hide the very green
-     * it is supposed to be covering over. */
-    s_over = lv_arc_create(scr);
-    lv_obj_set_size(s_over, LIFE_RING_D, LIFE_RING_D);
-    lv_obj_center(s_over);
-    lv_obj_add_flag(s_over, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_add_flag(s_over, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_over, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_style(s_over, NULL, LV_PART_KNOB);
-    lv_arc_set_bg_angles(s_over, 135, 45);
-    lv_arc_set_mode(s_over, LV_ARC_MODE_REVERSE);
-    lv_arc_set_range(s_over, 0, LIFE_BAR_FULL);
-    lv_obj_set_style_arc_width(s_over, LIFE_RING_W, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_over, LIFE_RING_W, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(s_over, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(s_over, true, LV_PART_INDICATOR);
+    /* Overflow band: one arc per slice of the sweep, on the same track and created
+     * straight after the base ring so they draw on top of it. Angles are set
+     * explicitly rather than via a value and an arc mode, so which slice each
+     * segment covers is unambiguous. Each background is transparent — a painted
+     * track would hide the very green the band is meant to be covering. */
+    for (int i = 0; i < LIFE_OVER_SEGS; i++) {
+        int a0 = RING_SWEEP_START + RING_SWEEP_DEG * i / LIFE_OVER_SEGS;
+        int a1 = RING_SWEEP_START + RING_SWEEP_DEG * (i + 1) / LIFE_OVER_SEGS;
+        /* Overlap the neighbour by a degree so integer rounding cannot leave a
+         * hairline of green showing between two segments. */
+        if (i < LIFE_OVER_SEGS - 1) a1 += 1;
+
+        lv_obj_t *seg = lv_arc_create(scr);
+        lv_obj_set_size(seg, LIFE_RING_D, LIFE_RING_D);
+        lv_obj_center(seg);
+        lv_obj_add_flag(seg, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(seg, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_style(seg, NULL, LV_PART_KNOB);
+        lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
+        /* Square ends, so segments abut instead of beading at every join. */
+        lv_obj_set_style_arc_rounded(seg, false, LV_PART_INDICATOR);
+        lv_arc_set_bg_angles(seg, a0 % 360, a1 % 360);
+        lv_arc_set_angles(seg, a0 % 360, a1 % 360);
+        s_over_seg[i] = seg;
+    }
 
     s_rainbow = lv_timer_create(rainbow_cb, RAINBOW_PERIOD_MS, NULL);
     lv_timer_pause(s_rainbow);
