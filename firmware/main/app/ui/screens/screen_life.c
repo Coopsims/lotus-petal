@@ -57,10 +57,9 @@
 #define LIFE_OVER_FROM_START 1
 
 /* Past double the starting total the band is full and length can no longer say
- * anything, so the whole spectrum is painted around it and rotated. The timer
- * only runs while it is needed. */
-#define RAINBOW_PERIOD_MS 70
-#define RAINBOW_STEP_DEG  4
+ * anything, so the whole spectrum is laid around it. Deliberately static: rotating
+ * it meant a full-ring redraw several times a second for as long as a player stayed
+ * above that total, which is a real cost for an idle screen. */
 
 static counter_t s_life = {
     .name = "Life",
@@ -84,17 +83,16 @@ static lv_obj_t *s_peer[NET_MAX_OTHERS];      /* small life ring per linked dial
 static lv_obj_t *s_peer_name[NET_MAX_OTHERS]; /* "P2" — goes gold on their turn  */
 static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contrast */
 
-static lv_obj_t   *s_over_seg[LIFE_OVER_SEGS];  /* overflow band, one per slice */
-static int         s_seg_a0[LIFE_OVER_SEGS];    /* angles currently pushed to LVGL, */
-static int         s_seg_a1[LIFE_OVER_SEGS];    /* so an unchanged segment is left alone */
-static bool        s_seg_shown[LIFE_OVER_SEGS]; /* likewise for the hidden flag */
-static bool        s_over_rainbow;              /* rainbow owns the colours right now */
-static lv_timer_t *s_rainbow;   /* runs only past double the starting total */
-static uint16_t    s_rainbow_hue;
-
+/* The overflow band is not made of objects: it is drawn straight onto the base
+ * ring's layer after the ring itself, so it needs no widgets, no per-segment
+ * bookkeeping and no timer — and it is guaranteed concentric with the green,
+ * because its geometry comes from that same object. */
+static int         s_over_fill;      /* how far along the sweep, in degrees; 0 = none */
+static bool        s_over_rainbow;   /* past double the starting total */
 static void refresh(void);
 static void refresh_turn(void);
 static void refresh_overflow(void);
+static void over_draw_cb(lv_event_t *e);
 
 /* Draw one rim readout. `m` is NULL for a player at the table with no dial —
  * their seat still shows, with a dash where the life total would be.
@@ -286,54 +284,9 @@ static void refresh_turn(void)
     lv_obj_set_style_text_color(s_turnlbl, lv_color_hex(col), 0);
 }
 
-/* Segments are laid out in geometric order but revealed in fill order, so which
- * end the band grows from is just a remap. */
-static lv_obj_t *over_seg_in_fill_order(int k)
-{
-#if LIFE_OVER_FROM_START
-    return s_over_seg[k];
-#else
-    return s_over_seg[LIFE_OVER_SEGS - 1 - k];
-#endif
-}
-
-/* Blue at the first segment, purple at the last. */
-static uint16_t over_hue(int k)
-{
-    return (uint16_t)(LIFE_OVER_HUE_LO +
-        (long)k * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / (LIFE_OVER_SEGS - 1));
-}
-
-/* The gradient hue of a segment depends only on its place in the band, never on
- * life, so the colours are painted once. Doing it per refresh meant invalidating
- * all 24 objects on every dial detent, where the base ring invalidates one — which
- * is exactly the kind of thing that makes a gauge feel heavier than its neighbour. */
-static void over_paint_gradient(void)
-{
-    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
-        lv_obj_set_style_arc_color(over_seg_in_fill_order(k),
-                                   lv_color_hsv_to_rgb(over_hue(k), 85, 95),
-                                   LV_PART_INDICATOR);
-    }
-}
-
-/* Rotates a full spectrum around the band. Only resumed past double the starting
- * total, where every segment is already showing. */
-static void rainbow_cb(lv_timer_t *t)
-{
-    LV_UNUSED(t);
-    s_rainbow_hue = (uint16_t)((s_rainbow_hue + RAINBOW_STEP_DEG) % 360);
-
-    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
-        uint16_t hue = (uint16_t)((s_rainbow_hue + k * 360 / LIFE_OVER_SEGS) % 360);
-        lv_obj_set_style_arc_color(over_seg_in_fill_order(k),
-                                   lv_color_hsv_to_rgb(hue, 90, 100), LV_PART_INDICATOR);
-    }
-}
-
 /* Positions along the sweep are measured in "fill degrees" from wherever the band
- * starts, 0..RING_SWEEP_DEG, and only converted to a screen angle at the end. That
- * keeps the direction flip to one place. */
+ * starts, 0..RING_SWEEP_DEG, and only converted to a screen angle here. That keeps
+ * the direction flip to one place. */
 static void over_seg_angles(int p0, int p1, int *a0, int *a1)
 {
 #if LIFE_OVER_FROM_START
@@ -346,83 +299,104 @@ static void over_seg_angles(int p0, int p1, int *a0, int *a1)
 #endif
 }
 
-/* Push angles only when they actually changed — LVGL invalidates on every set. */
-static void over_seg_set(int k, int p0, int p1)
+/* Blue at the first segment, purple at the last. */
+static uint16_t over_hue(int k)
 {
-    int a0, a1;
-    over_seg_angles(p0, p1, &a0, &a1);
-    if (s_seg_a0[k] == a0 && s_seg_a1[k] == a1) return;
-    s_seg_a0[k] = a0;
-    s_seg_a1[k] = a1;
-    lv_arc_set_angles(over_seg_in_fill_order(k), a0 % 360, a1 % 360);
+    return (uint16_t)(LIFE_OVER_HUE_LO +
+        (long)k * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / (LIFE_OVER_SEGS - 1));
 }
 
-/* Life above the starting total, drawn over the base ring as a blue -> purple
- * gradient band that covers the green as it fills.
- *
- * The band's END is computed from life exactly as the base ring's is, and the
- * segment straddling it is trimmed to land there. So the band grows a point at a
- * time like the base ring rather than in segment-sized jumps, and because every
- * segment is rounded, the trimmed end keeps the same cap the base ring has — at
- * any length, growing or shrinking. */
-static void refresh_overflow(void)
+/* Centre and radius of the ring's INDICATOR, derived from the base arc exactly the
+ * way the widget derives them itself (lv_arc's get_center, then minus the greatest
+ * indicator padding). Reading them off the same object is what keeps the band
+ * concentric with the green instead of a pixel or two out. */
+static void ring_geometry(lv_obj_t *arc, lv_point_t *center, int32_t *radius)
 {
-    if (!s_over_seg[0]) return;
+    int32_t pl = lv_obj_get_style_pad_left(arc, LV_PART_MAIN);
+    int32_t pr = lv_obj_get_style_pad_right(arc, LV_PART_MAIN);
+    int32_t pt = lv_obj_get_style_pad_top(arc, LV_PART_MAIN);
+    int32_t pb = lv_obj_get_style_pad_bottom(arc, LV_PART_MAIN);
 
-    int over = s_life.value - LIFE_BAR_FULL;
-    if (over <= 0) {
-        for (int k = 0; k < LIFE_OVER_SEGS; k++) {
-            if (!s_seg_shown[k]) continue;
-            s_seg_shown[k] = false;
-            lv_obj_add_flag(s_over_seg[k], LV_OBJ_FLAG_HIDDEN);
-        }
-        if (s_rainbow) lv_timer_pause(s_rainbow);
-        return;
-    }
+    int32_t r = LV_MIN(lv_obj_get_width(arc) - pl - pr,
+                       lv_obj_get_height(arc) - pt - pb) / 2;
 
-    int len = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
-    int fill = RING_SWEEP_DEG * len / LIFE_BAR_FULL;   /* how far along the sweep */
-    bool rainbow = (over > LIFE_BAR_FULL);
+    lv_area_t coords;
+    lv_obj_get_coords(arc, &coords);
+    center->x = coords.x1 + r + pl;
+    center->y = coords.y1 + r + pt;
+
+    int32_t ipad = LV_MAX(LV_MAX(lv_obj_get_style_pad_left(arc, LV_PART_INDICATOR),
+                                 lv_obj_get_style_pad_right(arc, LV_PART_INDICATOR)),
+                          LV_MAX(lv_obj_get_style_pad_top(arc, LV_PART_INDICATOR),
+                                 lv_obj_get_style_pad_bottom(arc, LV_PART_INDICATOR)));
+    *radius = r - ipad;
+}
+
+/* Paints the gradient band over the ring. Runs in the base arc's own draw pass, so
+ * one invalidation covers both and there is nothing to keep in sync.
+ *
+ * Colours are computed here rather than stored, so nothing is repainted when
+ * nothing changed — and above double the starting total the spectrum is laid around
+ * the band statically. An animated version cost a full-ring redraw several times a
+ * second, for the whole time a player sat above that total. */
+static void over_draw_cb(lv_event_t *e)
+{
+    if (s_over_fill <= 0 || !s_arc) return;
+
+    lv_layer_t *layer = lv_event_get_layer(e);
+    if (!layer) return;
+
+    lv_point_t center;
+    int32_t radius;
+    ring_geometry(s_arc, &center, &radius);
+    if (radius <= 0) return;
+
+    lv_draw_arc_dsc_t dsc;
+    lv_draw_arc_dsc_init(&dsc);
+    dsc.base.layer = layer;
+    dsc.center     = center;
+    dsc.radius     = (uint16_t)radius;
+    dsc.width      = lv_obj_get_style_arc_width(s_arc, LV_PART_INDICATOR);
+    dsc.opa        = LV_OPA_COVER;
+    dsc.rounded    = 1;   /* same caps the base ring has, at any length */
 
     for (int k = 0; k < LIFE_OVER_SEGS; k++) {
-        lv_obj_t *seg = over_seg_in_fill_order(k);
-
         int p0 = RING_SWEEP_DEG * k / LIFE_OVER_SEGS;
+        if (p0 >= s_over_fill) break;                 /* past the end of the band */
+
         int p1 = RING_SWEEP_DEG * (k + 1) / LIFE_OVER_SEGS;
+        if (p1 < s_over_fill) p1 += 1;                /* overlap, hiding the seam */
+        else                  p1 = s_over_fill;       /* the segment it ends inside */
 
-        if (p0 >= fill) {                 /* entirely past the end of the band */
-            if (s_seg_shown[k]) {
-                s_seg_shown[k] = false;
-                lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
-            }
-            continue;
-        }
-        if (p1 < fill) {
-            p1 += 1;                      /* overlap the neighbour to hide the seam */
-            if (p1 > fill) p1 = fill;
-        } else {
-            p1 = fill;                    /* the segment the band ends inside */
-        }
-
-        over_seg_set(k, p0, p1);
-        if (!s_seg_shown[k]) {
-            s_seg_shown[k] = true;
-            lv_obj_remove_flag(seg, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    /* Colours only change when the band crosses into or out of rainbow territory;
-     * the rainbow timer repaints them itself while it runs. */
-    if (rainbow != s_over_rainbow) {
-        s_over_rainbow = rainbow;
-        if (!rainbow) over_paint_gradient();
-    }
-
-    if (s_rainbow) {
-        if (rainbow) lv_timer_resume(s_rainbow);
-        else         lv_timer_pause(s_rainbow);
+        int a0, a1;
+        over_seg_angles(p0, p1, &a0, &a1);
+        dsc.start_angle = a0 % 360;
+        dsc.end_angle   = a1 % 360;
+        dsc.color = s_over_rainbow
+            ? lv_color_hsv_to_rgb((uint16_t)(k * 360 / LIFE_OVER_SEGS), 90, 100)
+            : lv_color_hsv_to_rgb(over_hue(k), 85, 95);
+        lv_draw_arc(layer, &dsc);
     }
 }
+
+/* Life above the starting total. Only recomputes how far the band reaches; the
+ * drawing itself happens in over_draw_cb. The base ring already invalidates when
+ * life changes, but not when it is pegged at full and only the overflow moved, so
+ * that case is invalidated explicitly — one call, once, per actual change. */
+static void refresh_overflow(void)
+{
+    int over = s_life.value - LIFE_BAR_FULL;
+    int len  = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
+    int fill = (over <= 0) ? 0 : RING_SWEEP_DEG * len / LIFE_BAR_FULL;
+    bool rainbow = (over > LIFE_BAR_FULL);
+
+    if (fill == s_over_fill && rainbow == s_over_rainbow) return;
+
+    s_over_fill    = fill;
+    s_over_rainbow = rainbow;
+    if (s_arc) lv_obj_invalidate(s_arc);
+}
+
 
 static void refresh(void)
 {
@@ -591,40 +565,10 @@ lv_obj_t *screen_life_create(void)
     lv_obj_set_style_arc_color(s_arc, lv_color_hex(UI_COL_TILE), LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
 
-    /* Overflow band: one arc per slice of the sweep, on the same track and created
-     * straight after the base ring so they draw on top of it. Angles are set
-     * explicitly rather than via a value and an arc mode, so which slice each
-     * segment covers is unambiguous. Each background is transparent — a painted
-     * track would hide the very green the band is meant to be covering. */
-    for (int i = 0; i < LIFE_OVER_SEGS; i++) {
-        lv_obj_t *seg = lv_arc_create(scr);
-        lv_obj_set_size(seg, LIFE_RING_D, LIFE_RING_D);
-        lv_obj_center(seg);
-        lv_obj_add_flag(seg, LV_OBJ_FLAG_IGNORE_LAYOUT);
-        lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(seg, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_remove_style(seg, NULL, LV_PART_KNOB);
-        lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
-        /* Rounded, to match the base ring's caps. Safe despite there being 24 of
-         * them: a rounded cap closes the end at the same stroke width rather than
-         * widening it, so with the 1 deg overlap above, each interior cap is
-         * covered by the next segment — and adjacent hues differ by under 3 deg,
-         * so even where a cap shows it is the same colour as what it sits on.
-         * Only the band's two outer ends are ever exposed, which is precisely
-         * where the rounding is wanted. */
-        lv_obj_set_style_arc_rounded(seg, true, LV_PART_INDICATOR);
-        s_over_seg[i] = seg;
-        /* refresh_overflow() owns the angles; -1 means "nothing pushed yet". */
-        s_seg_a0[i] = -1;
-        s_seg_a1[i] = -1;
-        s_seg_shown[i] = false;
-    }
-    over_paint_gradient();
-
-    s_rainbow = lv_timer_create(rainbow_cb, RAINBOW_PERIOD_MS, NULL);
-    lv_timer_pause(s_rainbow);
+    /* The overflow band above the starting total is drawn directly onto this arc's
+     * layer, after the arc has drawn itself, so it covers the green without any
+     * widgets of its own. See over_draw_cb(). */
+    lv_obj_add_event_cb(s_arc, over_draw_cb, LV_EVENT_DRAW_POST, NULL);
 
     /* Full-face tap target for opening Commander damage. Created early so it sits
      * BELOW the centre menu and Turn button (which catch their own taps); a short
