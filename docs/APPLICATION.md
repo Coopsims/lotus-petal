@@ -47,36 +47,40 @@ A large life total, starting at `GAME_STARTING_LIFE` (40), inside a 270° arc th
 shortens as life falls and sweeps hue 120→0, green through yellow to red. The arc
 opens downward, and the gap is where the Pass button sits.
 
-**Above the starting total** the gauge has nowhere left to grow, so a second band is
-laid *over* the base ring and eats the green as life climbs — blue at one point over,
-purple by the time it is full at double the starting total (80). Past that the band
-is full and length can no longer say anything, so the whole spectrum is painted
-around it and slowly rotated. The point is that gaining life keeps changing the
-picture rather than pegging at "full"; the rotation timer runs only while needed.
+**Above the starting total the gauge laps.** Every 40 points fills the ring once and
+then starts again from the beginning in a new colour scheme:
 
-An LVGL arc is a single solid colour, so the gradient cannot be one arc. It is
-drawn directly onto the base ring's layer in a `LV_EVENT_DRAW_POST` callback on that
-same arc — no widgets of its own, no timer, and geometry read off the ring itself so
-it is guaranteed concentric with the green rather than a pixel out.
+| Life | Ring |
+|---|---|
+| 1–40 | green → red by level, the original gauge untouched |
+| 41–80 | fills again as a blue → purple gradient |
+| 81+ | fills again as the full spectrum |
 
-Three things make it behave like the base ring rather than a bolt-on:
+Lapping rather than layering is what keeps this cheap. There is only ever **one band
+on the track**: nothing to keep concentric with anything else, no z-order, and the
+ring is never painted only to be covered up. The spectrum is a third colour scheme,
+not a third layer.
 
-- **One slice per point of life** (derived from the starting total), so a detent
-  advances the band by exactly one slice and the steps line up.
-- **The boundary slice is trimmed** to the exact end angle, computed from life the
-  same way the base ring computes its own, so length is continuous rather than
-  quantised — and every slice is rounded, so the trimmed end carries the same cap
-  the base ring has, at any length, growing or shrinking.
+An LVGL arc is a single solid colour, so a lap that needs a gradient cannot be the
+widget's own indicator. Those laps are drawn directly onto the arc's layer from a
+`LV_EVENT_DRAW_POST` callback on it, with the widget's indicator hidden while they
+run; geometry is read off that same arc, so it lines up by construction. Lap 0 is
+still just the plain arc.
+
+Three details make the later laps feel like lap 0 rather than a bolt-on:
+
+- **One slice per point of life**, derived from the starting total, so a detent
+  advances the band by exactly one slice.
+- **The boundary slice is trimmed** to the exact end angle, computed the same way the
+  arc computes its own, so length is continuous rather than quantised — and every
+  slice is rounded, so the end carries the same cap at any length, growing or
+  shrinking.
 - **Nothing is stored or repainted speculatively.** Colours are computed inside the
-  draw loop, and `refresh_overflow()` only recomputes how far the band reaches,
-  invalidating once when that actually changed. A detent costs one invalidation of
-  one object — the same as the base ring alone.
+  draw loop, and a detent costs one invalidation of one object — the same as lap 0.
+  The spectrum is deliberately static: rotating it cost a full-ring redraw several
+  times a second for as long as a player stayed that high.
 
-Above double the starting total the spectrum is laid around the band **statically**.
-Rotating it looked good but cost a full-ring redraw several times a second for as
-long as a player stayed that high, which is a poor trade on an otherwise idle
-screen. `LIFE_OVER_FROM_START` flips which end the band grows from, that being a
-matter of taste.
+`LIFE_OVER_FROM_START` flips which end the later laps fill from, that being taste.
 
 Around it:
 

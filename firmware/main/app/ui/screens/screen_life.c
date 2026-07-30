@@ -38,12 +38,14 @@
 #define RING_SWEEP_DEG   270
 
 /* Above the starting total the gauge has nowhere left to grow, so a second band
- * is laid OVER the base ring and eats the green as life climbs — gaining life
- * keeps changing the picture instead of pegging at full.
+ * the gauge LAPS: it starts again from the beginning in a new colour scheme rather
+ * than a second ring being layered over the first. One band on the track, whatever
+ * the total — nothing to keep concentric, nothing drawn only to be covered up, and
+ * the third lap is just another scheme rather than a third layer.
  *
  * An LVGL arc is a single solid colour, so a gradient along the sweep has to be
- * built from segments: each covers one slice and carries its own hue, blue at the
- * first through purple at the last. */
+ * built from slices: each carries its own hue, blue at the first through purple at
+ * the last. */
 /* One segment per point of life over the starting total, so the band gains exactly
  * one segment per detent and its steps line up with the base ring's. Deriving it
  * rather than picking a number keeps that true if the starting life ever changes. */
@@ -88,10 +90,12 @@ static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contras
  * bookkeeping and no timer — and it is guaranteed concentric with the green,
  * because its geometry comes from that same object. */
 static int         s_over_fill;      /* how far along the sweep, in degrees; 0 = none */
-static bool        s_over_rainbow;   /* past double the starting total */
+static bool        s_over_rainbow;   /* third lap onwards */
+static bool        s_base_muted;     /* base indicator hidden while a later lap draws */
 static void refresh(void);
 static void refresh_turn(void);
-static void refresh_overflow(void);
+static void refresh_overflow(int lap, int within);
+static void base_indicator_mute(bool mute);
 static void over_draw_cb(lv_event_t *e);
 
 /* Draw one rim readout. `m` is NULL for a player at the table with no dial —
@@ -379,16 +383,24 @@ static void over_draw_cb(lv_event_t *e)
     }
 }
 
-/* Life above the starting total. Only recomputes how far the band reaches; the
- * drawing itself happens in over_draw_cb. The base ring already invalidates when
- * life changes, but not when it is pegged at full and only the overflow moved, so
- * that case is invalidated explicitly — one call, once, per actual change. */
-static void refresh_overflow(void)
+/* On a later lap the slices are the gauge, so the widget's own indicator is hidden
+ * outright. Toggled only on the transition, since a style change invalidates. */
+static void base_indicator_mute(bool mute)
 {
-    int over = s_life.value - LIFE_BAR_FULL;
-    int len  = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
-    int fill = (over <= 0) ? 0 : RING_SWEEP_DEG * len / LIFE_BAR_FULL;
-    bool rainbow = (over > LIFE_BAR_FULL);
+    if (mute == s_base_muted || !s_arc) return;
+    s_base_muted = mute;
+    lv_obj_set_style_arc_opa(s_arc, mute ? LV_OPA_TRANSP : LV_OPA_COVER,
+                             LV_PART_INDICATOR);
+}
+
+/* Only recomputes how far round the current lap the band reaches; the drawing
+ * itself happens in over_draw_cb. The arc already invalidates when its own value
+ * changes, but on a later lap that value is pinned at 0 and only the band moves, so
+ * that case is invalidated explicitly — one call, once, per actual change. */
+static void refresh_overflow(int lap, int within)
+{
+    int fill = (lap == 0) ? 0 : RING_SWEEP_DEG * within / LIFE_BAR_FULL;
+    bool rainbow = (lap >= 2);
 
     if (fill == s_over_fill && rainbow == s_over_rainbow) return;
 
@@ -433,22 +445,33 @@ static void refresh(void)
         lv_obj_add_flag(s_skull, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Base ring: length tracks life 0..LIFE_BAR_FULL, colour sweeps green (full)
-     * through yellow to red (near 0) via hue 120..0. Above the starting total it
-     * simply sits full and the overflow ring takes over. */
-    int bar = s_life.value;
-    if (bar < 0) {
-        bar = 0;
-    } else if (bar > LIFE_BAR_FULL) {
-        bar = LIFE_BAR_FULL;
+    /* Which lap of the gauge we are on, and how far round it. Every LIFE_BAR_FULL
+     * points fills the ring once and then starts again from the beginning:
+     *   lap 0  the familiar green -> red by level
+     *   lap 1  blue -> purple gradient
+     *   lap 2+ the full spectrum
+     * Only ever one band on the track, so there is nothing layered over anything. */
+    int life = s_life.value;
+    if (life < 0) life = 0;
+
+    int lap    = (life > 0) ? (life - 1) / LIFE_BAR_FULL : 0;
+    int within = (life > 0) ? life - lap * LIFE_BAR_FULL : 0;
+
+    if (lap == 0) {
+        /* The original gauge, untouched: length tracks life and the colour sweeps
+         * green (full) through yellow to red (near 0) via hue 120..0. */
+        lv_arc_set_value(s_arc, within);
+        uint16_t hue = (uint16_t)((long)within * 120 / LIFE_BAR_FULL);
+        lv_obj_set_style_arc_color(s_arc, lv_color_hsv_to_rgb(hue, 85, 95),
+                                   LV_PART_INDICATOR);
+    } else {
+        /* A later lap is drawn as slices, so the widget's own single-colour
+         * indicator steps aside rather than being painted over. */
+        lv_arc_set_value(s_arc, 0);
     }
-    lv_arc_set_value(s_arc, bar);
+    base_indicator_mute(lap > 0);
 
-    uint16_t hue = (uint16_t)((long)bar * 120 / LIFE_BAR_FULL);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hsv_to_rgb(hue, 85, 95),
-                               LV_PART_INDICATOR);
-
-    refresh_overflow();
+    refresh_overflow(lap, within);
 }
 
 static void menu_cb(lv_event_t *e)
