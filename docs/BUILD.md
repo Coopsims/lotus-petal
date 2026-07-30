@@ -95,8 +95,13 @@ The S3 reports `ESP32-S3` with embedded PSRAM. Anything else is the wrong chip.
 # Wipe stored state: saved game, brightness, touch calibration
 idf.py -C firmware -p PORT erase-flash
 
-# Back the whole flash up before overwriting a device you care about
-esptool --port PORT read-flash 0x0 0x1000000 backup.bin
+# Back up before overwriting a device you care about. 0x800000 covers every byte
+# the partition table allocates (ota_1 ends at 0x620000); the rest of a 16 MB part
+# is unallocated and reads back erased. Expect ~6 min per 4 MB — read in chunks and
+# concatenate, since esptool only writes the file once the whole read completes.
+esptool --port PORT read_flash 0x0        0x400000 chunk_0.bin
+esptool --port PORT read_flash 0x400000   0x400000 chunk_1.bin
+cat chunk_0.bin chunk_1.bin > backup.bin
 
 # Battery-curve calibration build (see docs/HARDWARE.md)
 idf.py -C firmware -DLOTUS_BATTERY_CALIB=1 build flash
@@ -176,4 +181,4 @@ did not fire, not that the firmware failed.
 | `E gpio: gpio_install_isr_service(): GPIO isr service already installed` | **Benign, expected.** The touch driver installs the shared GPIO interrupt service first; the dial only wants to add a handler to it. `hal_dial.c` tolerates this explicitly — the message is ESP-IDF's, logged at ERROR level for a condition that is normal here. |
 | Two dials never see each other | Channel mismatch, or the radio is following an access-point association. |
 | App does not fit the partition | Custom partition table not picked up; check `CONFIG_PARTITION_TABLE_CUSTOM`. |
-| Large esptool reads fail intermittently | Known flakiness over USB-JTAG on some units. Use the default baud, or enter download mode. |
+| A full-flash read seems to hang | It is just slow, not stuck: ~92 kbit/s over USB-JTAG *regardless* of `-b`, so 16 MB takes ~25 minutes and esptool only writes the file at the very end. Read in chunks (see above). |
