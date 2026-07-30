@@ -256,11 +256,16 @@ void petal_reboot(void);
 uint32_t petal_random(void);
 
 /** Identity for the About screen. Every string is NUL-terminated; a platform
- *  that cannot answer one leaves it empty rather than inventing a value. */
+ *  that cannot answer one leaves it empty rather than inventing a value.
+ *
+ *  Caveat on `build_date`: treat it as a hint, not an identity. On ESP-IDF it
+ *  comes from the app descriptor, which is only recompiled when its own source
+ *  changes — so an incremental build ships genuinely new code with an old date.
+ *  The version string is the trustworthy discriminator. */
 typedef struct {
     uint8_t mac[6];        /* same address petal_radio_self_mac() reports */
     char    chip[24];      /* "ESP32-S3 rev0"          */
-    char    build_date[24];/* when this image was built */
+    char    build_date[24];/* when this image was built — see the caveat below */
     char    sdk[24];       /* platform SDK version      */
 } petal_device_info_t;
 

@@ -179,6 +179,8 @@ did not fire, not that the firmware failed.
 | Touch feels laggy | `CONFIG_LV_DEF_REFR_PERIOD` above 16. |
 | Watchdog reset while opening a screen | LVGL heap exhaustion — check `CONFIG_LV_USE_CLIB_MALLOC=y`. |
 | `E gpio: gpio_install_isr_service(): GPIO isr service already installed` | **Benign, expected.** The touch driver installs the shared GPIO interrupt service first; the dial only wants to add a handler to it. `hal_dial.c` tolerates this explicitly — the message is ESP-IDF's, logged at ERROR level for a condition that is normal here. |
+| About screen's "Built" date is stale | Expected on an incremental build. ESP-IDF only recompiles the app-descriptor object when its *source* changes, and `__DATE__`/`__TIME__` do not, so the date can lag by hours while the code is genuinely new. **`PROJECT_VER` is the reliable discriminator** — changing it does force the descriptor to rebuild. To confirm what is actually running, compare the `ELF file SHA256` in the boot log. |
+| A source edit seems to have no effect | Check the file's mtime. Restoring a file with `mv backup orig` preserves the *backup's* timestamp, so CMake sees it as older than the build and never reconfigures — you rebuild and get the old value. `touch` the file to force it. |
 | Two dials never see each other | Channel mismatch, or the radio is following an access-point association. |
 | App does not fit the partition | Custom partition table not picked up; check `CONFIG_PARTITION_TABLE_CUSTOM`. |
 | A full-flash read seems to hang | It is just slow, not stuck: ~92 kbit/s over USB-JTAG *regardless* of `-b`, so 16 MB takes ~25 minutes and esptool only writes the file at the very end. Read in chunks (see above). |
