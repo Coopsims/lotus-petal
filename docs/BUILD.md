@@ -113,6 +113,29 @@ idf.py -C firmware -p PORT app-flash
 idf.py -C firmware fullclean
 ```
 
+## Versioning
+
+`PROJECT_VER` in [`firmware/CMakeLists.txt`](../firmware/CMakeLists.txt) is the only
+place a version is written down. It goes into the firmware descriptor, and the About
+screen reads it back from there at runtime — so there is no second copy in the UI to
+drift out of step with what was actually built.
+
+**Bump the minor on every change**; the major only deliberately. Two reasons it
+matters more than usual here:
+
+- Dials update each other over the radio, so two units can easily end up on
+  different builds. The version is how you tell.
+- An incremental build does *not* refresh the descriptor's date, but changing
+  `PROJECT_VER` does force it — so the version is the only field that is always
+  honest about what is running.
+
+```bash
+# after editing PROJECT_VER
+touch firmware/CMakeLists.txt   # make sure CMake reconfigures; see Troubleshooting
+idf.py -C firmware build
+esptool image_info --version 2 firmware/build/lotus-petal.bin | grep -i version
+```
+
 ## Checks worth running
 
 ```bash

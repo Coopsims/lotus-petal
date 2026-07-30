@@ -54,15 +54,18 @@ void screen_about_init(void)
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COL_GOLD), 0);
     lv_obj_set_style_pad_bottom(title, 10, 0);
 
-    add_row(s_root, "Version", "v" UI_APP_VERSION);
-    add_row(s_root, "Author",  UI_APP_AUTHOR);
-
-    /* Everything below comes from the platform rather than being compiled in, so
-     * this page is honest about the device it is actually running on. */
+    /* Everything here comes from the platform rather than being compiled in, so the
+     * page is honest about the image it is actually running. */
     petal_device_info_t dev;
     petal_device_info(&dev);
 
-    char buf[32];
+    char buf[40];
+    if (dev.app_version[0]) {
+        snprintf(buf, sizeof(buf), "v%s", dev.app_version);
+        add_row(s_root, "Version", buf);
+    }
+    add_row(s_root, "Author", UI_APP_AUTHOR);
+
     /* Split across two lines: a full address does not fit the width of a round
      * face at a readable size. This is the same address the other dials identify
      * us by, which is what makes it worth showing at all. */

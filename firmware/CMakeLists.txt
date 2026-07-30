@@ -8,9 +8,10 @@
 # ../docs/PORTING.md for taking this to different hardware.
 cmake_minimum_required(VERSION 3.16)
 
-# App version. Ends up in the firmware descriptor and on the About screen; keep
-# it in step with UI_APP_VERSION in main/app/ui/ui_common.h.
-set(PROJECT_VER "4.1")
+# App version — THE single source of truth. It goes into the firmware descriptor,
+# and the About screen reads it back from there at runtime, so there is nowhere else
+# to update. Bump the MINOR on every change; the major only on request.
+set(PROJECT_VER "4.2")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(lotus-petal)

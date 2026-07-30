@@ -16,9 +16,13 @@
  * content inside the inscribed circle. */
 #define UI_DIM PETAL_DISP_W
 
-/* Product name + version, shown in Settings > About. */
-#define UI_APP_NAME    "Lotus Petal"
-#define UI_APP_VERSION "4.1"
+/* Product name, shown on the splash, the mode picker and About.
+ *
+ * The VERSION deliberately lives only in firmware/CMakeLists.txt (PROJECT_VER):
+ * the About screen reads it back out of the built image through
+ * petal_device_info(), so there is no second copy here to fall out of step with
+ * what was actually built. */
+#define UI_APP_NAME "Lotus Petal"
 
 /* Palette (dark theme for the round display). */
 #define UI_COL_BG        0x0A0A0F

@@ -68,7 +68,9 @@ void petal_device_info(petal_device_info_t *out)
     }
     snprintf(out->chip, sizeof(out->chip), "%s rev%d", model, chip.revision / 100);
 
+    /* Straight out of the app descriptor, which CMake fills from PROJECT_VER. */
     const esp_app_desc_t *app = esp_app_get_description();
+    snprintf(out->app_version, sizeof(out->app_version), "%s", app ? app->version : "");
     snprintf(out->build_date, sizeof(out->build_date), "%s", app ? app->date : "");
     snprintf(out->sdk, sizeof(out->sdk), "%s", IDF_VER);
 }
