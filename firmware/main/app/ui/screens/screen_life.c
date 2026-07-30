@@ -38,10 +38,16 @@
 #define RING_SWEEP_DEG   270
 
 /* Above the starting total the gauge has nowhere left to grow, so a second band
- * the gauge LAPS: it starts again from the beginning in a new colour scheme rather
- * than a second ring being layered over the first. One band on the track, whatever
- * the total — nothing to keep concentric, nothing drawn only to be covered up, and
- * the third lap is just another scheme rather than a third layer.
+ * the ring stays FULL and its segments are RECOLOURED instead. Life above the
+ * starting total sweeps a colour front round the ring: each point past it repaints
+ * one more segment in the new lap's colour, and the segments it has not reached yet
+ * still show the lap before — so at 41 the ring is a full green one with a single
+ * blue segment, not a nearly empty one.
+ *
+ * It reads like a second ring laid over the first, but there is only ever one band:
+ * every segment is drawn exactly once, in whichever colour it should currently be.
+ * Nothing is painted and then covered, nothing has to be kept concentric with
+ * anything else, and a further lap is just another colour scheme.
  *
  * An LVGL arc is a single solid colour, so a gradient along the sweep has to be
  * built from slices: each carries its own hue, blue at the first through purple at
@@ -89,9 +95,9 @@ static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contras
  * ring's layer after the ring itself, so it needs no widgets, no per-segment
  * bookkeeping and no timer — and it is guaranteed concentric with the green,
  * because its geometry comes from that same object. */
-static int         s_over_fill;      /* how far along the sweep, in degrees; 0 = none */
-static bool        s_over_rainbow;   /* third lap onwards */
-static bool        s_base_muted;     /* base indicator hidden while a later lap draws */
+static int         s_over_lap;       /* 0 = plain arc; >=1 = slices draw the ring */
+static int         s_over_shown;     /* segments the current lap has recoloured */
+static bool        s_base_muted;     /* widget indicator hidden while slices draw */
 static void refresh(void);
 static void refresh_turn(void);
 static void refresh_overflow(int lap, int within);
@@ -310,6 +316,16 @@ static uint16_t over_hue(int k)
         (long)k * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / (LIFE_OVER_SEGS - 1));
 }
 
+/* The colour segment `k` carries once `lap` is complete. Expressing it this way is
+ * what lets a lap show the previous one underneath: the segments a lap has reached
+ * use lap_colour(lap, k), and the rest use lap_colour(lap - 1, k). */
+static lv_color_t lap_colour(int lap, int k)
+{
+    if (lap <= 0) return lv_color_hsv_to_rgb(120, 85, 95);           /* full-life green */
+    if (lap == 1) return lv_color_hsv_to_rgb(over_hue(k), 85, 95);   /* blue -> purple  */
+    return lv_color_hsv_to_rgb((uint16_t)(k * 360 / LIFE_OVER_SEGS), 90, 100);
+}
+
 /* Centre and radius of the ring's INDICATOR, derived from the base arc exactly the
  * way the widget derives them itself (lv_arc's get_center, then minus the greatest
  * indicator padding). Reading them off the same object is what keeps the band
@@ -336,16 +352,17 @@ static void ring_geometry(lv_obj_t *arc, lv_point_t *center, int32_t *radius)
     *radius = r - ipad;
 }
 
-/* Paints the gradient band over the ring. Runs in the base arc's own draw pass, so
- * one invalidation covers both and there is nothing to keep in sync.
+/* Paints the ring while a lap past the first is in progress. Every segment is drawn
+ * exactly once: those the colour front has passed in the current lap's colour, the
+ * rest in the previous lap's. Runs in the base arc's own draw pass, so one
+ * invalidation covers everything and there is nothing to keep in sync.
  *
- * Colours are computed here rather than stored, so nothing is repainted when
- * nothing changed — and above double the starting total the spectrum is laid around
- * the band statically. An animated version cost a full-ring redraw several times a
- * second, for the whole time a player sat above that total. */
+ * Colours are computed here rather than stored, so nothing is repainted when nothing
+ * changed. The spectrum is deliberately static — animating it cost a full-ring
+ * redraw several times a second for as long as a player stayed that high. */
 static void over_draw_cb(lv_event_t *e)
 {
-    if (s_over_fill <= 0 || !s_arc) return;
+    if (s_over_lap <= 0 || !s_arc) return;
 
     lv_layer_t *layer = lv_event_get_layer(e);
     if (!layer) return;
@@ -362,23 +379,49 @@ static void over_draw_cb(lv_event_t *e)
     dsc.radius     = (uint16_t)radius;
     dsc.width      = lv_obj_get_style_arc_width(s_arc, LV_PART_INDICATOR);
     dsc.opa        = LV_OPA_COVER;
-    dsc.rounded    = 1;   /* same caps the base ring has, at any length */
+    dsc.rounded    = 1;   /* same caps the plain arc has, at either end */
 
-    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+    int a0, a1;
+
+    /* Segments this lap has recoloured. Adjacent ones overlap by a degree so
+     * integer rounding cannot leave a hairline between them; the last does not, so
+     * the colour front stays a crisp edge. */
+    for (int k = 0; k < s_over_shown; k++) {
         int p0 = RING_SWEEP_DEG * k / LIFE_OVER_SEGS;
-        if (p0 >= s_over_fill) break;                 /* past the end of the band */
-
         int p1 = RING_SWEEP_DEG * (k + 1) / LIFE_OVER_SEGS;
-        if (p1 < s_over_fill) p1 += 1;                /* overlap, hiding the seam */
-        else                  p1 = s_over_fill;       /* the segment it ends inside */
+        if (k + 1 < s_over_shown) p1 += 1;
 
-        int a0, a1;
         over_seg_angles(p0, p1, &a0, &a1);
         dsc.start_angle = a0 % 360;
         dsc.end_angle   = a1 % 360;
-        dsc.color = s_over_rainbow
-            ? lv_color_hsv_to_rgb((uint16_t)(k * 360 / LIFE_OVER_SEGS), 90, 100)
-            : lv_color_hsv_to_rgb(over_hue(k), 85, 95);
+        dsc.color       = lap_colour(s_over_lap, k);
+        lv_draw_arc(layer, &dsc);
+    }
+
+    if (s_over_shown >= LIFE_OVER_SEGS) return;   /* lap complete, nothing behind */
+
+    /* Everything the front has not reached still shows the lap before. A completed
+     * lap 0 is one flat colour, so it goes out as a single arc rather than 39 of
+     * them — which is the common case, and the cheap one. */
+    if (s_over_lap == 1) {
+        over_seg_angles(RING_SWEEP_DEG * s_over_shown / LIFE_OVER_SEGS,
+                        RING_SWEEP_DEG, &a0, &a1);
+        dsc.start_angle = a0 % 360;
+        dsc.end_angle   = a1 % 360;
+        dsc.color       = lap_colour(0, 0);
+        lv_draw_arc(layer, &dsc);
+        return;
+    }
+
+    for (int k = s_over_shown; k < LIFE_OVER_SEGS; k++) {
+        int p0 = RING_SWEEP_DEG * k / LIFE_OVER_SEGS;
+        int p1 = RING_SWEEP_DEG * (k + 1) / LIFE_OVER_SEGS;
+        if (k + 1 < LIFE_OVER_SEGS) p1 += 1;
+
+        over_seg_angles(p0, p1, &a0, &a1);
+        dsc.start_angle = a0 % 360;
+        dsc.end_angle   = a1 % 360;
+        dsc.color       = lap_colour(s_over_lap - 1, k);
         lv_draw_arc(layer, &dsc);
     }
 }
@@ -393,19 +436,23 @@ static void base_indicator_mute(bool mute)
                              LV_PART_INDICATOR);
 }
 
-/* Only recomputes how far round the current lap the band reaches; the drawing
- * itself happens in over_draw_cb. The arc already invalidates when its own value
- * changes, but on a later lap that value is pinned at 0 and only the band moves, so
- * that case is invalidated explicitly — one call, once, per actual change. */
+/* Only recomputes how far round the colour front has got; the drawing itself
+ * happens in over_draw_cb. There is one segment per point of life, so the count of
+ * recoloured segments IS the life past the starting total — no rounding, and the
+ * front moves exactly one segment per detent.
+ *
+ * The arc invalidates itself when its own value changes, but on a later lap that
+ * value is pinned at 0 and only the front moves, so that case is invalidated
+ * explicitly — one call, once, per actual change. */
 static void refresh_overflow(int lap, int within)
 {
-    int fill = (lap == 0) ? 0 : RING_SWEEP_DEG * within / LIFE_BAR_FULL;
-    bool rainbow = (lap >= 2);
+    int shown = (lap == 0) ? 0 : within;
+    if (shown > LIFE_OVER_SEGS) shown = LIFE_OVER_SEGS;
 
-    if (fill == s_over_fill && rainbow == s_over_rainbow) return;
+    if (lap == s_over_lap && shown == s_over_shown) return;
 
-    s_over_fill    = fill;
-    s_over_rainbow = rainbow;
+    s_over_lap   = lap;
+    s_over_shown = shown;
     if (s_arc) lv_obj_invalidate(s_arc);
 }
 
@@ -465,8 +512,8 @@ static void refresh(void)
         lv_obj_set_style_arc_color(s_arc, lv_color_hsv_to_rgb(hue, 85, 95),
                                    LV_PART_INDICATOR);
     } else {
-        /* A later lap is drawn as slices, so the widget's own single-colour
-         * indicator steps aside rather than being painted over. */
+        /* Later laps draw the whole ring as slices, so the widget's own
+         * single-colour indicator steps aside rather than being painted over. */
         lv_arc_set_value(s_arc, 0);
     }
     base_indicator_mute(lap > 0);

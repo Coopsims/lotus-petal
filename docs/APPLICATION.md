@@ -47,40 +47,45 @@ A large life total, starting at `GAME_STARTING_LIFE` (40), inside a 270° arc th
 shortens as life falls and sweeps hue 120→0, green through yellow to red. The arc
 opens downward, and the gap is where the Pass button sits.
 
-**Above the starting total the gauge laps.** Every 40 points fills the ring once and
-then starts again from the beginning in a new colour scheme:
+**Above the starting total the ring stays full and its segments recolour.** Life past
+40 sweeps a colour front round the ring: each point repaints one more segment in the
+new lap's colour, and the segments the front has not reached still show the lap
+before.
 
 | Life | Ring |
 |---|---|
-| 1–40 | green → red by level, the original gauge untouched |
-| 41–80 | fills again as a blue → purple gradient |
-| 81+ | fills again as the full spectrum |
+| 1–40 | green → red by level — the plain arc, untouched |
+| 41–80 | full ring; a blue → purple front sweeps round over the green |
+| 81+ | full ring; a spectrum front sweeps round over the blue → purple |
 
-Lapping rather than layering is what keeps this cheap. There is only ever **one band
-on the track**: nothing to keep concentric with anything else, no z-order, and the
-ring is never painted only to be covered up. The spectrum is a third colour scheme,
-not a third layer.
+So at 41 you see a full green ring with one blue segment, not a nearly empty one —
+the length still reads "at or above full", and the colour front carries how far over.
 
-An LVGL arc is a single solid colour, so a lap that needs a gradient cannot be the
-widget's own indicator. Those laps are drawn directly onto the arc's layer from a
+It looks like a second ring laid over the first, but there is only ever **one band**:
+each segment is drawn exactly once, in whichever colour it should currently be.
+Nothing is painted and then covered up, and nothing has to be kept concentric with
+anything else. A further lap is just another colour scheme, not another layer.
+
+An LVGL arc is a single solid colour, so laps that need more than one cannot be the
+widget's own indicator. They are drawn directly onto the arc's layer from a
 `LV_EVENT_DRAW_POST` callback on it, with the widget's indicator hidden while they
-run; geometry is read off that same arc, so it lines up by construction. Lap 0 is
-still just the plain arc.
+run and the geometry read off that same arc, so it lines up by construction.
 
-Three details make the later laps feel like lap 0 rather than a bolt-on:
+Details that make it feel like lap 0 rather than a bolt-on:
 
-- **One slice per point of life**, derived from the starting total, so a detent
-  advances the band by exactly one slice.
-- **The boundary slice is trimmed** to the exact end angle, computed the same way the
-  arc computes its own, so length is continuous rather than quantised — and every
-  slice is rounded, so the end carries the same cap at any length, growing or
-  shrinking.
-- **Nothing is stored or repainted speculatively.** Colours are computed inside the
-  draw loop, and a detent costs one invalidation of one object — the same as lap 0.
-  The spectrum is deliberately static: rotating it cost a full-ring redraw several
-  times a second for as long as a player stayed that high.
+- **One segment per point of life**, derived from the starting total, so the front
+  advances exactly one segment per detent with no rounding anywhere.
+- **Rounded caps** at both ends, matching the plain arc at any length.
+- **Adjacent segments overlap by a degree** so rounding cannot leave a hairline
+  between them, but the leading segment does not — the colour front stays crisp.
+- **Nothing stored or repainted speculatively.** Colours are computed in the draw
+  loop, and a detent costs one invalidation. Where the trailing region is one flat
+  colour — a completed lap 0, the common case — it goes out as a single arc rather
+  than 39, so life 41 costs two arc draws rather than forty.
+- **The spectrum is static.** Rotating it cost a full-ring redraw several times a
+  second for as long as a player stayed that high.
 
-`LIFE_OVER_FROM_START` flips which end the later laps fill from, that being taste.
+`LIFE_OVER_FROM_START` flips which way the front sweeps, that being taste.
 
 Around it:
 
