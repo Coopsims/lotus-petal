@@ -24,8 +24,24 @@
  * the battery readout at the top. */
 #define PEER_R 104
 
-/* The ring reads "full" at the starting life and empties as life falls to 0. */
+/* Geometry of the life gauge, shared by the base ring and the overflow ring. */
+#define LIFE_RING_D 336
+#define LIFE_RING_W 18
+
+/* The base ring reads "full" at the starting life and empties as life falls to 0. */
 #define LIFE_BAR_FULL GAME_STARTING_LIFE
+
+/* Above the starting total the gauge has nowhere left to grow, so a SECOND ring
+ * fills from the opposite end and eats the base ring as life climbs — gaining
+ * life keeps changing the picture instead of pegging at full. Blue at one over,
+ * purple by the time the second ring is full at double the starting total. */
+#define LIFE_OVER_HUE_LO 220   /* blue   */
+#define LIFE_OVER_HUE_HI 285   /* purple */
+
+/* Past double there is no length left to say anything with, so the colour cycles
+ * instead. The timer only runs while it is needed. */
+#define RAINBOW_PERIOD_MS 70
+#define RAINBOW_STEP_DEG  6
 
 static counter_t s_life = {
     .name = "Life",
@@ -49,8 +65,13 @@ static lv_obj_t *s_peer[NET_MAX_OTHERS];      /* small life ring per linked dial
 static lv_obj_t *s_peer_name[NET_MAX_OTHERS]; /* "P2" — goes gold on their turn  */
 static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contrast */
 
+static lv_obj_t   *s_over;      /* overflow ring, above the starting total */
+static lv_timer_t *s_rainbow;   /* runs only past double the starting total */
+static uint16_t    s_rainbow_hue;
+
 static void refresh(void);
 static void refresh_turn(void);
+static void refresh_overflow(void);
 
 /* Draw one rim readout. `m` is NULL for a player at the table with no dial —
  * their seat still shows, with a dash where the life total would be.
@@ -242,6 +263,46 @@ static void refresh_turn(void)
     lv_obj_set_style_text_color(s_turnlbl, lv_color_hex(col), 0);
 }
 
+/* Cycles the overflow ring's hue. Only resumed past double the starting total,
+ * where the ring is already full and length can no longer convey anything. */
+static void rainbow_cb(lv_timer_t *t)
+{
+    LV_UNUSED(t);
+    s_rainbow_hue = (uint16_t)((s_rainbow_hue + RAINBOW_STEP_DEG) % 360);
+    lv_obj_set_style_arc_color(s_over, lv_color_hsv_to_rgb(s_rainbow_hue, 90, 100),
+                               LV_PART_INDICATOR);
+}
+
+/* Life above the starting total. Grows from the far end of the gauge (REVERSE),
+ * so it covers the green rather than extending past it, and sweeps blue -> purple
+ * as it fills. */
+static void refresh_overflow(void)
+{
+    if (!s_over) return;
+
+    int over = s_life.value - LIFE_BAR_FULL;
+    if (over <= 0) {
+        lv_obj_add_flag(s_over, LV_OBJ_FLAG_HIDDEN);
+        if (s_rainbow) lv_timer_pause(s_rainbow);
+        return;
+    }
+    lv_obj_remove_flag(s_over, LV_OBJ_FLAG_HIDDEN);
+
+    int len = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
+    lv_arc_set_value(s_over, len);
+
+    if (over > LIFE_BAR_FULL) {
+        if (s_rainbow) lv_timer_resume(s_rainbow);   /* the colour does the talking */
+        return;
+    }
+
+    if (s_rainbow) lv_timer_pause(s_rainbow);
+    uint16_t hue = (uint16_t)(LIFE_OVER_HUE_LO +
+        (long)len * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / LIFE_BAR_FULL);
+    lv_obj_set_style_arc_color(s_over, lv_color_hsv_to_rgb(hue, 85, 95),
+                               LV_PART_INDICATOR);
+}
+
 static void refresh(void)
 {
     char buf[8];
@@ -277,8 +338,9 @@ static void refresh(void)
         lv_obj_add_flag(s_skull, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Life ring: length tracks life 0..LIFE_BAR_FULL, colour sweeps green (full)
-     * through yellow to red (near 0) via hue 120..0. */
+    /* Base ring: length tracks life 0..LIFE_BAR_FULL, colour sweeps green (full)
+     * through yellow to red (near 0) via hue 120..0. Above the starting total it
+     * simply sits full and the overflow ring takes over. */
     int bar = s_life.value;
     if (bar < 0) {
         bar = 0;
@@ -290,6 +352,8 @@ static void refresh(void)
     uint16_t hue = (uint16_t)((long)bar * 120 / LIFE_BAR_FULL);
     lv_obj_set_style_arc_color(s_arc, lv_color_hsv_to_rgb(hue, 85, 95),
                                LV_PART_INDICATOR);
+
+    refresh_overflow();
 }
 
 static void menu_cb(lv_event_t *e)
@@ -393,17 +457,39 @@ lv_obj_t *screen_life_create(void)
      * shrinks and shifts green -> red as life falls. Purely decorative, so it
      * floats above the layout and never intercepts taps. */
     s_arc = lv_arc_create(scr);
-    lv_obj_set_size(s_arc, 336, 336);
+    lv_obj_set_size(s_arc, LIFE_RING_D, LIFE_RING_D);
     lv_obj_center(s_arc);
     lv_obj_add_flag(s_arc, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB); /* hide the drag knob */
     lv_arc_set_bg_angles(s_arc, 135, 45);           /* 270°, opening downward */
     lv_arc_set_range(s_arc, 0, LIFE_BAR_FULL);
-    lv_obj_set_style_arc_width(s_arc, 18, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 18, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_arc, LIFE_RING_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_arc, LIFE_RING_W, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_arc, lv_color_hex(UI_COL_TILE), LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
+
+    /* Overflow ring, on the same track and created straight after the base ring
+     * so it draws on top of it. REVERSE grows it from the opposite end, and its
+     * own background is transparent — a painted track would hide the very green
+     * it is supposed to be covering over. */
+    s_over = lv_arc_create(scr);
+    lv_obj_set_size(s_over, LIFE_RING_D, LIFE_RING_D);
+    lv_obj_center(s_over);
+    lv_obj_add_flag(s_over, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_add_flag(s_over, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_over, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_style(s_over, NULL, LV_PART_KNOB);
+    lv_arc_set_bg_angles(s_over, 135, 45);
+    lv_arc_set_mode(s_over, LV_ARC_MODE_REVERSE);
+    lv_arc_set_range(s_over, 0, LIFE_BAR_FULL);
+    lv_obj_set_style_arc_width(s_over, LIFE_RING_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_over, LIFE_RING_W, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(s_over, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(s_over, true, LV_PART_INDICATOR);
+
+    s_rainbow = lv_timer_create(rainbow_cb, RAINBOW_PERIOD_MS, NULL);
+    lv_timer_pause(s_rainbow);
 
     /* Full-face tap target for opening Commander damage. Created early so it sits
      * BELOW the centre menu and Turn button (which catch their own taps); a short

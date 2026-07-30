@@ -40,10 +40,15 @@ member. Seats come from sorting every member's hardware address, so all dials
 independently compute the *same* seat order with no negotiation — and the table
 resizes by itself as dials join or drop.
 
-**Shared state carries an epoch.** The turn pointer belongs to the table rather than
-to any one dial, so it cannot be single-writer. Every change bumps a counter, and a
-dial adopts any state with a higher one. In practice there is nothing to race over:
-whoever holds the turn is the only one who passes it.
+**Shared state carries an epoch.** Some facts belong to the table rather than to any
+one dial, so they cannot be single-writer: the turn pointer, and who holds the
+monarchy or the initiative. Every change bumps a counter, and a dial adopts any
+state with a higher one, so the newest claim wins and everyone converges on it.
+
+That last part is why monarch and initiative are stored as **which turn position
+holds them** rather than as a flag on each dial. A per-dial flag lets four dials all
+claim the crown at once with nothing able to settle it — strictly worse than not
+tracking it. As a position, the illegal state simply cannot be represented.
 
 ### Timing
 
@@ -65,7 +70,7 @@ convergence floor, not the update rate.
 typedef struct __attribute__((packed)) {
     uint32_t magic;       /* 0x314E544C, "LTN1" — ours or someone else's  */
     uint8_t  type;        /* 1 = STATE, 2 = LEAVE                          */
-    uint8_t  ver;         /* 3                                             */
+    uint8_t  ver;         /* 4                                             */
     uint16_t pin;         /* which table                                   */
     uint8_t  mac[6];      /* who is speaking                               */
     int16_t  life;        /* ── everything above here is FROZEN ──          */
@@ -74,9 +79,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  players;     /* table size, including anyone without a dial    */
     uint8_t  roll;        /* this dial's d20; 0 = has not rolled            */
     uint8_t  order;       /* claimed turn position, 1 = first; 0 = unclaimed */
-    uint8_t  _pad;
+    uint8_t  monarch;     /* turn position holding the monarchy, 0 = nobody  */
     uint8_t  gen;         /* bumped to start a fresh round                  */
-    uint8_t  _pad2[3];
+    uint8_t  initiative;  /* turn position holding the initiative            */
+    uint8_t  _pad[2];
     uint32_t turn;        /* a full lap of the table                        */
     uint32_t epoch;       /* highest wins, for the shared fields            */
 } net_pkt_t;
@@ -96,6 +102,11 @@ builds from going silent at each other.
 - **Round state is only taken from an exactly matching `ver`.** Seating and turn
   semantics have changed before, and a mismatched reading of them is worse than no
   reading — you would show a confidently wrong turn order.
+
+`ver 4` added `monarch` and `initiative`, reusing two padding bytes so the packet
+stayed 34 bytes. A ver-3 dial and a ver-4 dial therefore still show each other's
+life, but not turn order — the intended trade, and the reason both dials in a pod
+want updating together (which the firmware transfer makes about a minute's work).
 
 ### Deriving the table
 

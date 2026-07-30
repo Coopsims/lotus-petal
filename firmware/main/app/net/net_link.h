@@ -102,6 +102,18 @@ void net_link_begin_new_round(void);
  *  clear its own game state in response. */
 bool net_link_take_new_round(void);
 
+/** Turn position holding the monarchy / the initiative, or 0 for nobody.
+ *
+ *  Both are table-wide facts — the rules give them to exactly one player — so
+ *  they live in the shared round state rather than as a flag on each dial. A
+ *  per-dial flag lets four dials all claim the crown with no way to settle it,
+ *  which is worse than not tracking it at all. Setting one bumps the epoch, so
+ *  the newest claim wins and every dial converges on it. */
+int  net_link_monarch(void);
+int  net_link_initiative(void);
+void net_link_set_monarch(int pos);
+void net_link_set_initiative(int pos);
+
 /** Set and broadcast the shared round state (bumps the epoch).
  *  `active_pos` 0 means "not started yet", which is how the table size can be
  *  agreed before anyone has rolled. */

@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define NET_MAGIC 0x314E544Cu /* "LTN1" — tells our packets from anyone else's */
-#define NET_VER   3
+#define NET_VER   4
 
 /* Wire-format rule, so dials on different builds keep talking:
  *   - fields up to and including `alive` are FROZEN. Never reorder or remove
@@ -15,9 +15,13 @@
  *     zero-filling whatever the sender did not send. A shorter packet is an
  *     older dial; a longer one is a newer dial with fields we do not know.
  *   - life and who is alive therefore always cross versions. Round state
- *     (seating, turn, generation) is only taken from an exactly matching
- *     version, since its meaning has changed before and a mismatched reading
- *     would be worse than none. */
+ *     (seating, turn, generation, monarch, initiative) is only taken from an
+ *     exactly matching version, since its meaning has changed before and a
+ *     mismatched reading would be worse than none.
+ *
+ * ver 4 added monarch and initiative to the round state, reusing two padding
+ * bytes so the packet size did not change. A ver-3 dial therefore still shares
+ * life with a ver-4 dial, but not turn order — which is the intended trade. */
 
 #define HEARTBEAT_MS 700   /* re-send own state at least this often */
 #define EXPIRE_MS    6000  /* drop a member silent for this long */
@@ -40,9 +44,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  players;
     uint8_t  roll;
     uint8_t  order;
-    uint8_t  _pad;
+    uint8_t  monarch;    /* turn position holding the monarchy, 0 = nobody */
     uint8_t  gen;
-    uint8_t  _pad2[3];
+    uint8_t  initiative; /* turn position holding the initiative, 0 = nobody */
+    uint8_t  _pad[2];
     uint32_t turn;
     uint32_t epoch;      /* round state is shared: highest epoch wins */
 } net_pkt_t;
@@ -84,6 +89,8 @@ static int      s_active_pos;    /* 1..s_players; 0 until play starts */
 static int      s_players = 2;   /* table size, dials + anyone without one */
 static uint32_t s_epoch;
 static uint8_t  s_gen;        /* bumped to start a fresh round */
+static int      s_monarch;    /* turn position holding the monarchy, 0 = nobody */
+static int      s_initiative; /* turn position holding the initiative, 0 = nobody */
 static bool     s_new_round;  /* someone else did; clear our game */
 
 static petal_queue_t   *s_rx_q;
@@ -158,6 +165,8 @@ void net_link_set_pin(uint16_t pin)
     s_active_pos  = 0;
     s_players     = 2;
     s_turn        = 1;
+    s_monarch     = 0;
+    s_initiative  = 0;
 }
 
 void net_link_set_raw_sink(net_raw_sink_fn fn) { s_raw_sink = fn; }
@@ -192,6 +201,8 @@ static void send_pkt(uint8_t type)
         .turn        = s_turn,
         .epoch       = s_epoch,
         .gen         = s_gen,
+        .monarch     = (uint8_t)s_monarch,
+        .initiative  = (uint8_t)s_initiative,
     };
     memcpy(p.mac, s_self_mac, 6);
     petal_radio_broadcast(&p, (int)sizeof(p));
@@ -255,9 +266,34 @@ int      net_link_players(void)      { return s_players < 2 ? 2 : s_players; }
 uint32_t net_link_turn(void)         { return s_turn; }
 bool     net_link_round_valid(void)  { return s_active_pos > 0; }
 
+int net_link_monarch(void)    { return s_monarch; }
+int net_link_initiative(void) { return s_initiative; }
+
+/* Table-wide, so these travel with the epoch exactly like the turn pointer: a
+ * change supersedes everyone else's view rather than being merged with it. That
+ * is what makes "exactly one holder" representable at all — with a per-dial flag
+ * the table can disagree and nothing can decide who is right. */
+void net_link_set_monarch(int pos)
+{
+    if (pos == s_monarch) return;
+    s_monarch = pos;
+    s_epoch++;
+    send_pkt(NET_MSG_STATE);
+}
+
+void net_link_set_initiative(int pos)
+{
+    if (pos == s_initiative) return;
+    s_initiative = pos;
+    s_epoch++;
+    send_pkt(NET_MSG_STATE);
+}
+
 void net_link_begin_new_round(void)
 {
     s_gen++;
+    s_monarch    = 0;   /* a new game starts with the crown unclaimed */
+    s_initiative = 0;
     /* Play restarts from the first seat. Deliberately NOT active_pos 0, which
      * would throw the table back to the roll-off — the seats are already
      * settled and re-deciding them every round is just ceremony. */
@@ -368,6 +404,8 @@ void net_link_tick(void)
             s_players    = p.players ? p.players : s_players;
             if (p.gen != s_gen) { s_gen = p.gen; s_new_round = true; }
             s_turn        = p.turn;
+            s_monarch     = p.monarch;
+            s_initiative  = p.initiative;
         }
     }
 

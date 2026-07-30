@@ -47,6 +47,13 @@ A large life total, starting at `GAME_STARTING_LIFE` (40), inside a 270° arc th
 shortens as life falls and sweeps hue 120→0, green through yellow to red. The arc
 opens downward, and the gap is where the Pass button sits.
 
+**Above the starting total** the gauge has nowhere left to grow, so a second ring
+fills from the *opposite* end and eats the green as life climbs — blue at one over,
+purple by the time it is full at double the starting total (80). Past that the ring
+is already full and length can no longer say anything, so the colour cycles through
+the spectrum instead. The point is that gaining life keeps changing the picture
+rather than pegging at "full". The cycling timer runs only while it is needed.
+
 Around it:
 
 - **Battery** at the top: a glyph plus a percentage, red below 15 %. While
@@ -95,8 +102,20 @@ routing and the persistence all resize themselves.
 What ships: Treasure, Food, Clue, Blood (the four "tokens", whose tiles go gold
 when you hold any), **Cmdr A** and **Cmdr B** (which track times cast and display
 the derived +2-per-cast tax rather than the raw count), Poison (red at 10), Energy,
-Experience, Storm (zeroed every turn), Monarch and Initiative (toggles), the Ring
+Experience, Storm (zeroed every turn), **Monarch** and **Initiative**, the Ring
 (cycles through I–IV), and Day/Night.
+
+**Monarch and Initiative are table-wide.** The rules give each to exactly one
+player, so in a linked game they are shared round state rather than a local toggle:
+claiming one takes it from whoever had it, and their dial turns off by itself on the
+next tick. When someone else holds it your tile shows *their* position (`P3`) rather
+than a bare `OFF`, so the crown is always locatable. In a local game there is no
+table to share with and both stay the plain toggles they have always been.
+
+Nothing keys off a counter's display name. Each carries its meaning in `role` and
+`per_turn`, because matching on labels meant renaming one could silently change the
+rules — poison feeds a lethal threshold, so a renamed label would have quietly
+stopped the bow-out prompt ever appearing.
 
 Tap a tile to select it, dial to change it. Toggles and cycles advance on the dial
 too.

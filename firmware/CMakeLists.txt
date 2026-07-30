@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # App version. Ends up in the firmware descriptor and on the About screen; keep
 # it in step with UI_APP_VERSION in main/app/ui/ui_common.h.
-set(PROJECT_VER "4.0")
+set(PROJECT_VER "4.1")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(lotus-petal)

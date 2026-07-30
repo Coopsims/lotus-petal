@@ -58,6 +58,29 @@ int game_total_players(void);
  *  at the table have no dial of their own. */
 void game_set_total_players(int n);
 
+/** This dial's turn position, 1-based. Always 1 in a local game, where there is
+ *  only one seat that matters. In a linked game it is the position claimed on the
+ *  seat picker, and 0 until seats are settled. */
+int game_my_position(void);
+
+/* ---- things exactly one player at the table holds ----
+ * The monarchy and the initiative belong to a single player by the rules, so they
+ * are stored as WHICH turn position holds them (0 = nobody) rather than as a flag
+ * on each dial. A per-dial flag lets the whole table claim the crown at once with
+ * no way to settle it, which is worse than not tracking it.
+ *
+ * In a linked game these are shared round state and every dial agrees. In a local
+ * game there is no table to share with, so the counters on the Counters screen
+ * remain the plain toggles they always were and these are not consulted. */
+
+/** Turn position holding it, or 0 for nobody. Meaningful in a linked game. */
+int  game_monarch(void);
+int  game_initiative(void);
+
+/** Claim for `pos`, or pass 0 to leave it unheld. Ignored in a local game. */
+void game_set_monarch(int pos);
+void game_set_initiative(int pos);
+
 /** Out of the game. Never set automatically: life can legitimately dip below
  *  zero mid-resolution, so the player decides when they are actually dead. */
 bool game_is_eliminated(void);

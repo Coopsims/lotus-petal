@@ -1,9 +1,11 @@
 #include "screen_counters.h"
 
 #include "counter.h"
+#include "game.h"
 #include "ui_common.h"
 
 #include <stdint.h>
+#include <stdio.h>
 
 /*
  * Every counter and token is one box in a scrollable grid. Add a new one by
@@ -36,8 +38,8 @@ static counter_t s_counters[] = {
     { .name = "Energy",     .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false },
     { .name = "Experience", .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false },
     { .name = "Storm",      .type = COUNTER_TYPE_INT,                                        .value = 0, .min = 0, .max = 99, .wrap = false, .per_turn = true },
-    { .name = "Monarch",    .type = COUNTER_TYPE_TOGGLE,                                     .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
-    { .name = "Initiative", .type = COUNTER_TYPE_TOGGLE,                                     .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
+    { .name = "Monarch",    .type = COUNTER_TYPE_TOGGLE,  .role = COUNTER_ROLE_MONARCH,      .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
+    { .name = "Initiative", .type = COUNTER_TYPE_TOGGLE,  .role = COUNTER_ROLE_INITIATIVE,   .value = 0, .min = 0, .max = 1,  .wrap = true, .labels = k_onoff },
     { .name = "Ring",       .type = COUNTER_TYPE_CYCLE,                                      .value = 0, .min = 0, .max = 4,  .wrap = true, .labels = k_ring },
     { .name = "Day/Night",  .type = COUNTER_TYPE_CYCLE,                                      .value = 0, .min = 0, .max = 2,  .wrap = true, .labels = k_daynight },
 };
@@ -48,6 +50,32 @@ static lv_obj_t *s_value[COUNTER_COUNT];
 static lv_obj_t *s_flash[COUNTER_COUNT];
 static int s_selected;
 
+/* Which turn position currently holds this table-wide counter, or 0 for nobody.
+ * Only meaningful in a linked game. */
+static int table_holder(const counter_t *c)
+{
+    if (c->role == COUNTER_ROLE_MONARCH)    return game_monarch();
+    if (c->role == COUNTER_ROLE_INITIATIVE) return game_initiative();
+    return 0;
+}
+
+/* Claim or release a table-wide counter for this dial. */
+static void table_claim(const counter_t *c, bool mine)
+{
+    int pos = mine ? game_my_position() : 0;
+    if (c->role == COUNTER_ROLE_MONARCH)    game_set_monarch(pos);
+    if (c->role == COUNTER_ROLE_INITIATIVE) game_set_initiative(pos);
+}
+
+/* True when the table decides this counter rather than this dial: a linked game
+ * with seats settled far enough that positions mean something. */
+static bool table_wide_live(const counter_t *c)
+{
+    return counter_role_is_table_wide(c->role) &&
+           game_mode() == GAME_MODE_REMOTE &&
+           game_my_position() > 0;
+}
+
 static void refresh_tile(int i)
 {
     counter_t *c = &s_counters[i];
@@ -56,6 +84,15 @@ static void refresh_tile(int i)
      * every counter draws through the same call. */
     char buf[12];
     counter_value_text(c, buf, sizeof(buf));
+
+    /* Someone else holding the crown is more useful than being told "OFF": show
+     * whose it is, using the same P<n> turn positions the rest of the UI does. */
+    if (table_wide_live(c)) {
+        int holder = table_holder(c);
+        if (holder > 0 && holder != game_my_position()) {
+            snprintf(buf, sizeof(buf), "P%d", holder);
+        }
+    }
     lv_label_set_text(s_value[i], buf);
 
     uint32_t col;
@@ -194,6 +231,25 @@ void screen_counters_set_value(int i, int v)
     refresh_tile(i);
 }
 
+void screen_counters_sync_shared(void)
+{
+    for (int i = 0; i < COUNTER_COUNT; i++) {
+        counter_t *c = &s_counters[i];
+        if (!table_wide_live(c)) continue;
+
+        /* Exactly one player holds it, so ours is on only while the table says the
+         * holder is us. That is what makes a second dial claiming it turn ours off
+         * without either dial having to ask the other. */
+        int want = (table_holder(c) == game_my_position()) ? c->max : c->min;
+        if (c->value != want) {
+            c->value = want;
+            refresh_tile(i);
+        } else {
+            refresh_tile(i);   /* the holder shown may still have changed */
+        }
+    }
+}
+
 void screen_counters_new_turn(void)
 {
     for (int i = 0; i < COUNTER_COUNT; i++) {
@@ -224,6 +280,12 @@ void screen_counters_handle_input(input_event_t ev)
     default:
         return;
     }
+
+    /* For a table-wide counter the local value is only the input; the table is
+     * the truth. Publish the claim and let the next sync settle what is shown —
+     * including taking the crown off whoever had it. */
+    counter_t *changed = &s_counters[s_selected];
+    if (table_wide_live(changed)) table_claim(changed, changed->value > changed->min);
 
     refresh_tile(s_selected);
     ui_flash(s_flash[s_selected]);

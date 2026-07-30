@@ -29,6 +29,11 @@ int screen_counters_poison(void);
 int screen_counters_get_value(int i);
 void screen_counters_set_value(int i, int v);
 
+/** Bring the table-wide counters (monarch, initiative) into line with what the
+ *  table says, and redraw who holds them. Call from the network tick; a no-op in
+ *  a local game. */
+void screen_counters_sync_shared(void);
+
 /** Advance a turn: zero the per-turn counters (e.g. Storm). */
 void screen_counters_new_turn(void);
 

@@ -49,6 +49,37 @@ void game_sync_remote(void)
 
 bool game_is_eliminated(void) { return s_eliminated; }
 
+static bool remote_live(void);
+
+int game_my_position(void)
+{
+    /* A local game has exactly one seat worth naming, and calling it 1 keeps the
+     * "does this position hold it" comparisons below uniform across both modes. */
+    return remote_live() ? net_link_my_order() : 1;
+}
+
+int game_monarch(void)
+{
+    return remote_live() ? net_link_monarch() : 0;
+}
+
+int game_initiative(void)
+{
+    return remote_live() ? net_link_initiative() : 0;
+}
+
+void game_set_monarch(int pos)
+{
+    if (!remote_live()) return;   /* local games keep it in the counter itself */
+    net_link_set_monarch(pos);
+}
+
+void game_set_initiative(int pos)
+{
+    if (!remote_live()) return;
+    net_link_set_initiative(pos);
+}
+
 void game_set_eliminated(bool out)
 {
     s_eliminated = out;

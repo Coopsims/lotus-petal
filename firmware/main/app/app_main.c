@@ -120,6 +120,7 @@ static void net_pump(lv_timer_t *t)
     saw_result = over;
 
     screen_pair_tick();
+    screen_counters_sync_shared();   /* monarch / initiative belong to the table */
     screen_life_refresh_peers();
 }
 

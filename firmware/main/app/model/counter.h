@@ -35,7 +35,17 @@ typedef enum {
     COUNTER_ROLE_TOKEN,         /**< A physical token you hold; highlighted when > 0. */
     COUNTER_ROLE_COMMANDER_TAX, /**< Counts casts; renders as the derived tax. */
     COUNTER_ROLE_POISON,        /**< Feeds a lethal threshold (see game.h). */
+    COUNTER_ROLE_MONARCH,       /**< Table-wide: exactly one player holds it. */
+    COUNTER_ROLE_INITIATIVE,    /**< Table-wide: exactly one player holds it. */
 } counter_role_t;
+
+/** True for the roles the whole table shares, where "on" means *this* player
+ *  holds something only one player can hold. In a linked game these are driven
+ *  by the shared round state rather than by the local counter value. */
+static inline bool counter_role_is_table_wide(counter_role_t r)
+{
+    return r == COUNTER_ROLE_MONARCH || r == COUNTER_ROLE_INITIATIVE;
+}
 
 /** Commander tax is two generic mana per previous cast from the command zone, so
  *  the stored value is the cast count and the displayed value is derived. */

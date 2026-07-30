@@ -18,7 +18,7 @@
 
 /* Product name + version, shown in Settings > About. */
 #define UI_APP_NAME    "Lotus Petal"
-#define UI_APP_VERSION "4.0"
+#define UI_APP_VERSION "4.1"
 
 /* Palette (dark theme for the round display). */
 #define UI_COL_BG        0x0A0A0F
