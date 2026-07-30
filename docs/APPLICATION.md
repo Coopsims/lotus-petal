@@ -54,12 +54,24 @@ is full and length can no longer say anything, so the whole spectrum is painted
 around it and slowly rotated. The point is that gaining life keeps changing the
 picture rather than pegging at "full"; the rotation timer runs only while needed.
 
-An LVGL arc is a single solid colour, so the gradient is built from
-`LIFE_OVER_SEGS` (24) segment arcs sharing the ring's track, each carrying its own
-hue and revealed in turn. Angles are set explicitly rather than through a value and
-an arc mode, so which slice each segment covers is unambiguous — and
-`LIFE_OVER_FROM_START` flips which end the band grows from in one constant, since
-that is a matter of taste rather than correctness.
+An LVGL arc is a single solid colour, so the gradient is built from segment arcs
+sharing the ring's track, each carrying its own hue and revealed in turn. Three
+things make it feel like the base ring rather than a separate widget:
+
+- **One segment per point of life** (`LIFE_OVER_SEGS` is derived from the starting
+  total), so a detent reveals exactly one segment and the steps line up.
+- **The boundary segment is trimmed** to the exact end angle, computed from life
+  the same way the base ring computes its own, so length is continuous rather than
+  quantised — and since every segment is rounded, the trimmed end carries the same
+  cap the base ring has, at any length, growing or shrinking.
+- **Colours are painted once, not per refresh.** A segment's gradient hue depends
+  only on its place in the band, so a dial detent invalidates the boundary segment
+  and nothing else. Repainting all of them every refresh made the gauge feel
+  heavier than the ring beside it.
+
+Angles are set explicitly rather than through a value and an arc mode, so which
+slice each segment covers is unambiguous; `LIFE_OVER_FROM_START` flips which end the
+band grows from in one constant, that being a matter of taste.
 
 Around it:
 

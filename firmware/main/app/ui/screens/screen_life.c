@@ -44,7 +44,10 @@
  * An LVGL arc is a single solid colour, so a gradient along the sweep has to be
  * built from segments: each covers one slice and carries its own hue, blue at the
  * first through purple at the last. */
-#define LIFE_OVER_SEGS   24
+/* One segment per point of life over the starting total, so the band gains exactly
+ * one segment per detent and its steps line up with the base ring's. Deriving it
+ * rather than picking a number keeps that true if the starting life ever changes. */
+#define LIFE_OVER_SEGS   LIFE_BAR_FULL
 #define LIFE_OVER_HUE_LO 220   /* blue   */
 #define LIFE_OVER_HUE_HI 285   /* purple */
 
@@ -82,6 +85,10 @@ static lv_obj_t *s_peer_name[NET_MAX_OTHERS]; /* "P2" — goes gold on their tur
 static lv_obj_t *s_peer_life[NET_MAX_OTHERS]; /* their life, always high contrast */
 
 static lv_obj_t   *s_over_seg[LIFE_OVER_SEGS];  /* overflow band, one per slice */
+static int         s_seg_a0[LIFE_OVER_SEGS];    /* angles currently pushed to LVGL, */
+static int         s_seg_a1[LIFE_OVER_SEGS];    /* so an unchanged segment is left alone */
+static bool        s_seg_shown[LIFE_OVER_SEGS]; /* likewise for the hidden flag */
+static bool        s_over_rainbow;              /* rainbow owns the colours right now */
 static lv_timer_t *s_rainbow;   /* runs only past double the starting total */
 static uint16_t    s_rainbow_hue;
 
@@ -297,6 +304,19 @@ static uint16_t over_hue(int k)
         (long)k * (LIFE_OVER_HUE_HI - LIFE_OVER_HUE_LO) / (LIFE_OVER_SEGS - 1));
 }
 
+/* The gradient hue of a segment depends only on its place in the band, never on
+ * life, so the colours are painted once. Doing it per refresh meant invalidating
+ * all 24 objects on every dial detent, where the base ring invalidates one — which
+ * is exactly the kind of thing that makes a gauge feel heavier than its neighbour. */
+static void over_paint_gradient(void)
+{
+    for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+        lv_obj_set_style_arc_color(over_seg_in_fill_order(k),
+                                   lv_color_hsv_to_rgb(over_hue(k), 85, 95),
+                                   LV_PART_INDICATOR);
+    }
+}
+
 /* Rotates a full spectrum around the band. Only resumed past double the starting
  * total, where every segment is already showing. */
 static void rainbow_cb(lv_timer_t *t)
@@ -311,8 +331,40 @@ static void rainbow_cb(lv_timer_t *t)
     }
 }
 
+/* Positions along the sweep are measured in "fill degrees" from wherever the band
+ * starts, 0..RING_SWEEP_DEG, and only converted to a screen angle at the end. That
+ * keeps the direction flip to one place. */
+static void over_seg_angles(int p0, int p1, int *a0, int *a1)
+{
+#if LIFE_OVER_FROM_START
+    *a0 = RING_SWEEP_START + p0;
+    *a1 = RING_SWEEP_START + p1;
+#else
+    /* Growing from the far end reverses the pair, so a0 stays the lower angle. */
+    *a0 = RING_SWEEP_START + RING_SWEEP_DEG - p1;
+    *a1 = RING_SWEEP_START + RING_SWEEP_DEG - p0;
+#endif
+}
+
+/* Push angles only when they actually changed — LVGL invalidates on every set. */
+static void over_seg_set(int k, int p0, int p1)
+{
+    int a0, a1;
+    over_seg_angles(p0, p1, &a0, &a1);
+    if (s_seg_a0[k] == a0 && s_seg_a1[k] == a1) return;
+    s_seg_a0[k] = a0;
+    s_seg_a1[k] = a1;
+    lv_arc_set_angles(over_seg_in_fill_order(k), a0 % 360, a1 % 360);
+}
+
 /* Life above the starting total, drawn over the base ring as a blue -> purple
- * gradient band that covers the green as it fills. */
+ * gradient band that covers the green as it fills.
+ *
+ * The band's END is computed from life exactly as the base ring's is, and the
+ * segment straddling it is trimmed to land there. So the band grows a point at a
+ * time like the base ring rather than in segment-sized jumps, and because every
+ * segment is rounded, the trimmed end keeps the same cap the base ring has — at
+ * any length, growing or shrinking. */
 static void refresh_overflow(void)
 {
     if (!s_over_seg[0]) return;
@@ -320,6 +372,8 @@ static void refresh_overflow(void)
     int over = s_life.value - LIFE_BAR_FULL;
     if (over <= 0) {
         for (int k = 0; k < LIFE_OVER_SEGS; k++) {
+            if (!s_seg_shown[k]) continue;
+            s_seg_shown[k] = false;
             lv_obj_add_flag(s_over_seg[k], LV_OBJ_FLAG_HIDDEN);
         }
         if (s_rainbow) lv_timer_pause(s_rainbow);
@@ -327,25 +381,41 @@ static void refresh_overflow(void)
     }
 
     int len = (over > LIFE_BAR_FULL) ? LIFE_BAR_FULL : over;
-
-    /* Round UP, so a single point over the starting total already shows something
-     * rather than waiting for a whole segment's worth. */
-    int shown = (len * LIFE_OVER_SEGS + LIFE_BAR_FULL - 1) / LIFE_BAR_FULL;
-    if (shown > LIFE_OVER_SEGS) shown = LIFE_OVER_SEGS;
-
+    int fill = RING_SWEEP_DEG * len / LIFE_BAR_FULL;   /* how far along the sweep */
     bool rainbow = (over > LIFE_BAR_FULL);
 
     for (int k = 0; k < LIFE_OVER_SEGS; k++) {
         lv_obj_t *seg = over_seg_in_fill_order(k);
-        if (k >= shown) {
-            lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+
+        int p0 = RING_SWEEP_DEG * k / LIFE_OVER_SEGS;
+        int p1 = RING_SWEEP_DEG * (k + 1) / LIFE_OVER_SEGS;
+
+        if (p0 >= fill) {                 /* entirely past the end of the band */
+            if (s_seg_shown[k]) {
+                s_seg_shown[k] = false;
+                lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+            }
             continue;
         }
-        lv_obj_remove_flag(seg, LV_OBJ_FLAG_HIDDEN);
-        if (!rainbow) {
-            lv_obj_set_style_arc_color(seg, lv_color_hsv_to_rgb(over_hue(k), 85, 95),
-                                       LV_PART_INDICATOR);
+        if (p1 < fill) {
+            p1 += 1;                      /* overlap the neighbour to hide the seam */
+            if (p1 > fill) p1 = fill;
+        } else {
+            p1 = fill;                    /* the segment the band ends inside */
         }
+
+        over_seg_set(k, p0, p1);
+        if (!s_seg_shown[k]) {
+            s_seg_shown[k] = true;
+            lv_obj_remove_flag(seg, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    /* Colours only change when the band crosses into or out of rainbow territory;
+     * the rainbow timer repaints them itself while it runs. */
+    if (rainbow != s_over_rainbow) {
+        s_over_rainbow = rainbow;
+        if (!rainbow) over_paint_gradient();
     }
 
     if (s_rainbow) {
@@ -527,12 +597,6 @@ lv_obj_t *screen_life_create(void)
      * segment covers is unambiguous. Each background is transparent — a painted
      * track would hide the very green the band is meant to be covering. */
     for (int i = 0; i < LIFE_OVER_SEGS; i++) {
-        int a0 = RING_SWEEP_START + RING_SWEEP_DEG * i / LIFE_OVER_SEGS;
-        int a1 = RING_SWEEP_START + RING_SWEEP_DEG * (i + 1) / LIFE_OVER_SEGS;
-        /* Overlap the neighbour by a degree so integer rounding cannot leave a
-         * hairline of green showing between two segments. */
-        if (i < LIFE_OVER_SEGS - 1) a1 += 1;
-
         lv_obj_t *seg = lv_arc_create(scr);
         lv_obj_set_size(seg, LIFE_RING_D, LIFE_RING_D);
         lv_obj_center(seg);
@@ -543,12 +607,21 @@ lv_obj_t *screen_life_create(void)
         lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_MAIN);
         lv_obj_set_style_arc_width(seg, LIFE_RING_W, LV_PART_INDICATOR);
         lv_obj_set_style_arc_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
-        /* Square ends, so segments abut instead of beading at every join. */
-        lv_obj_set_style_arc_rounded(seg, false, LV_PART_INDICATOR);
-        lv_arc_set_bg_angles(seg, a0 % 360, a1 % 360);
-        lv_arc_set_angles(seg, a0 % 360, a1 % 360);
+        /* Rounded, to match the base ring's caps. Safe despite there being 24 of
+         * them: a rounded cap closes the end at the same stroke width rather than
+         * widening it, so with the 1 deg overlap above, each interior cap is
+         * covered by the next segment — and adjacent hues differ by under 3 deg,
+         * so even where a cap shows it is the same colour as what it sits on.
+         * Only the band's two outer ends are ever exposed, which is precisely
+         * where the rounding is wanted. */
+        lv_obj_set_style_arc_rounded(seg, true, LV_PART_INDICATOR);
         s_over_seg[i] = seg;
+        /* refresh_overflow() owns the angles; -1 means "nothing pushed yet". */
+        s_seg_a0[i] = -1;
+        s_seg_a1[i] = -1;
+        s_seg_shown[i] = false;
     }
+    over_paint_gradient();
 
     s_rainbow = lv_timer_create(rainbow_cb, RAINBOW_PERIOD_MS, NULL);
     lv_timer_pause(s_rainbow);
